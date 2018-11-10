@@ -1,7 +1,9 @@
 package hash
 
 import (
+	"bytes"
 	"crypto/sha1"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -21,6 +23,8 @@ import (
 // - read -> lookup key in keymap, find it's offset and seek to that location and read it's value
 // - write -> append write entry to log, update location in keymap
 // - delete -> append delete entry to log, remove entry from keymap
+
+// Log Entry: <size:int32-little-endian><data:protobuf-encoded>
 
 // HashFunc is a hash func that takes a slice of bytes and returns a hash or an error
 type HashFunc func(key []byte) (string, error)
@@ -46,9 +50,9 @@ func NoHash(key []byte) (string, error) {
 // Index is a hash index implementation
 type Index struct {
 	mtx    sync.RWMutex
-	keymap map[string]int
+	keymap map[string]int64
 	log    *os.File
-	offset int
+	offset int64
 	hash   HashFunc
 }
 
@@ -73,7 +77,7 @@ func New(dir string, hash HashFunc) (*Index, error) {
 
 	return &Index{
 		mtx:    sync.RWMutex{},
-		keymap: make(map[string]int),
+		keymap: make(map[string]int64),
 		log:    f,
 		offset: 0,
 		hash:   hash,
@@ -91,7 +95,7 @@ func (i *Index) Write(key []byte, val []byte) error {
 		return err
 	}
 
-	// create our log entry
+	// create our log entry contents
 	entry := &pb.LogEntry{
 		Type:  pb.EntryType_WRITE,
 		Key:   hash,
@@ -104,8 +108,21 @@ func (i *Index) Write(key []byte, val []byte) error {
 		return fmt.Errorf("could not marshal log entry: %v", err)
 	}
 
+	// write the size of the data to a new buffer
+	buf := bytes.NewBuffer(nil)
+	err = binary.Write(buf, binary.LittleEndian, int32(len(data)))
+	if err != nil {
+		return fmt.Errorf("could not write data size to buffer: %v", err)
+	}
+
+	// write the data to the buffer
+	_, err = buf.Write(data)
+	if err != nil {
+		return fmt.Errorf("could not write data to buffer: %v", err)
+	}
+
 	// write the data to the file
-	nbytes, err := i.log.Write(data)
+	n, err := i.log.Write(buf.Bytes())
 	if err != nil {
 		return fmt.Errorf("could not write log entry: %v", err)
 	}
@@ -114,14 +131,58 @@ func (i *Index) Write(key []byte, val []byte) error {
 	i.keymap[hash] = i.offset
 
 	// update the offset with the number of bytes written
-	i.offset += nbytes
+	i.offset += int64(n)
+
+	// write contents to stable storage
+	err = i.log.Sync()
+	if err != nil {
+		return err
+	}
 
 	return nil
 }
 
 // Read looksup the key in the log and returns the value or an error if it wasn't found
 func (i *Index) Read(key []byte) ([]byte, error) {
-	return []byte{}, nil
+	i.mtx.RLock()
+	defer i.mtx.RUnlock()
+
+	// get the key's hash
+	hash, err := i.hash(key)
+	if err != nil {
+		return nil, err
+	}
+
+	offset, ok := i.keymap[hash]
+	if !ok {
+		return nil, fmt.Errorf("did not find key: %s in index", string(key))
+	}
+
+	size := make([]byte, 4) // data size is int32 (4 bytes)
+	_, err = i.log.ReadAt(size, offset)
+	if err != nil {
+		return nil, fmt.Errorf("could not read size at offset: %v, %v", offset, err)
+	}
+
+	var n int32
+	err = binary.Read(bytes.NewBuffer(size), binary.LittleEndian, n)
+	if err != nil {
+		return nil, fmt.Errorf("could not get size from bytes: %v", err)
+	}
+
+	data := make([]byte, n)
+	_, err = i.log.ReadAt(data, offset+int64(n))
+	if err != nil {
+		return nil, fmt.Errorf("could not read data from file: %v", err)
+	}
+
+	var entry pb.LogEntry
+	err = proto.Unmarshal(data, &entry)
+	if err != nil {
+		return nil, fmt.Errorf("could not unmarshal data into log entry: %v", err)
+	}
+
+	return entry.GetValue(), nil
 }
 
 // Delete removes the key from the keymap
