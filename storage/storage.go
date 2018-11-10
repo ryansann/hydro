@@ -7,7 +7,7 @@ import "io"
 
 // Storer is the interface that a storage engine implements
 type Storer interface {
-	Write(key []byte, value []byte) error
+	Write(key []byte, val []byte) error
 	Read(key []byte) ([]byte, error)
 	Delete(key []byte) error
 	io.Closer

@@ -81,7 +81,7 @@ func New(dir string, hash HashFunc) (*Index, error) {
 }
 
 // Write appends the key, value to the log and updates the keymap
-func (i *Index) Write(key []byte, value []byte) error {
+func (i *Index) Write(key []byte, val []byte) error {
 	i.mtx.Lock()
 	defer i.mtx.Unlock()
 
@@ -95,7 +95,7 @@ func (i *Index) Write(key []byte, value []byte) error {
 	entry := &pb.LogEntry{
 		Type:  pb.EntryType_WRITE,
 		Key:   hash,
-		Value: value,
+		Value: val,
 	}
 
 	// marshal the data into protobuf format
