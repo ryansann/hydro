@@ -1,7 +1,8 @@
 package hash
 
 import (
-	"crypto/md5"
+	"crypto/sha1"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,23 +19,23 @@ import (
 // - keeps entire keyset in memory in keymap
 // - keymap maps a keys hash to its offset in the storage file
 // - read -> lookup key in keymap, find it's offset and seek to that location and read it's value
-// - write -> append entry to log, update location in keymap
-// - delete -> remove entry from keymap
+// - write -> append write entry to log, update location in keymap
+// - delete -> append delete entry to log, remove entry from keymap
 
 // HashFunc is a hash func that takes a slice of bytes and returns a hash or an error
 type HashFunc func(key []byte) (string, error)
 
-// DefaultHash is a HashFunc that uses the md5 hashing algorithm
+// DefaultHash is a HashFunc that uses the sha1 hashing algorithm
 func DefaultHash(key []byte) (string, error) {
-	h := md5.New()
+	h := sha1.New()
 
 	_, err := h.Write(key)
 	if err != nil {
 		return "", err
 	}
 
-	res := h.Sum(nil)
-	return string(res), nil
+	str := hex.EncodeToString(h.Sum(nil))
+	return str, nil
 }
 
 // NoHash is a HashFunc that returns the key as a string without hashing
@@ -92,11 +93,12 @@ func (i *Index) Write(key []byte, value []byte) error {
 
 	// create our log entry
 	entry := &pb.LogEntry{
+		Type:  pb.EntryType_WRITE,
 		Key:   hash,
 		Value: value,
 	}
 
-	// marshal the data into bytes
+	// marshal the data into protobuf format
 	data, err := proto.Marshal(entry)
 	if err != nil {
 		return fmt.Errorf("could not marshal log entry: %v", err)
@@ -124,5 +126,29 @@ func (i *Index) Read(key []byte) ([]byte, error) {
 
 // Delete removes the key from the keymap
 func (i *Index) Delete(key []byte) error {
+	return nil
+}
+
+// Close implements the io.Closer interface, it closes the log file
+func (i *Index) Close() error {
+	err := i.log.Close()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (i *Index) cleanup() error {
+	err := i.Close()
+	if err != nil {
+		return err
+	}
+
+	err = os.Remove(i.log.Name())
+	if err != nil {
+		return err
+	}
+
 	return nil
 }

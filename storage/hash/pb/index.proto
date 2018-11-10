@@ -2,7 +2,13 @@ syntax = "proto3";
 
 package pb;
 
+enum EntryType {
+	WRITE = 0;
+	DELETE = 1;
+}
+
 message LogEntry {
-	string key = 1;
-	bytes value = 2;
+	EntryType type = 1;
+	string key = 2;
+	bytes value = 3;
 }
