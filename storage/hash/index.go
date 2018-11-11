@@ -244,13 +244,13 @@ func (i *Index) Restore() error {
 func (i *Index) Close() error {
 	defer close(i.done)
 
+	// signal sync to stop
+	i.done <- struct{}{}
+
 	err := i.log.Close()
 	if err != nil {
 		return err
 	}
-
-	// signal sync to stop
-	i.done <- struct{}{}
 
 	return nil
 }
