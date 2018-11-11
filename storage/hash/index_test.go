@@ -41,7 +41,7 @@ func TestIndexWrite(t *testing.T) {
 }
 
 func runIndexWriteTest(t *testing.T, h HashFunc) {
-	hi1, err := NewIndex("./data", h)
+	hi1, err := NewIndex()
 	defer hi1.cleanup()
 	if err != nil {
 		t.Log(err)
@@ -65,7 +65,7 @@ func TestIndexRead(t *testing.T) {
 }
 
 func runIndexReadTest(t *testing.T, h HashFunc) {
-	hi, err := NewIndex("./data", h)
+	hi, err := NewIndex()
 	defer hi.cleanup()
 	if err != nil {
 		t.Log(err)
@@ -95,5 +95,33 @@ func runIndexReadTest(t *testing.T, h HashFunc) {
 		}
 
 		t.Logf("success - expected: %s got: %s", string(test.val), string(val))
+	}
+}
+
+// We can do 100,000+ writes a second - 9,730 ns/op
+func BenchmarkIndexWrite(b *testing.B) {
+	b.N = 100000 // we don't want to claim too much disk space (e.g. b = 10,000,000)
+
+	runBenchIndexWrite(b, NoHash)
+	runBenchIndexWrite(b, DefaultHash)
+}
+
+func runBenchIndexWrite(b *testing.B, h HashFunc) {
+	k, v := []byte("key"), []byte("val")
+
+	hi, err := NewIndex()
+	defer hi.cleanup()
+
+	if err != nil {
+		b.Log(err)
+		b.Fail()
+	}
+
+	for n := 0; n < b.N; n++ {
+		err := hi.Write(k, v)
+		if err != nil {
+			b.Log(err)
+			b.Fail()
+		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/ryansann/hydro/storage/hash/pb"
@@ -18,6 +19,7 @@ import (
 // - uses single append only log (can grow boundlessly with no segmentation / compaction)
 // - keeps entire keyset in an in-memory map (Index.keymap)
 // - keymap maps a keys hash to its corresponding log entry's offset in the storage file
+// - starts a background process to ensure log file is synced to disk every sync interval
 //
 // Note: in log file an entry is represented as -> <size><data>
 // where size is a uint32 encoded in little endian to 4 bytes, storing the length in bytes of data,
@@ -32,9 +34,16 @@ import (
 // - delete -> write a delete log entry (for restore purposes), remove key from keymap
 // - restore -> start from beginning of storage file, read all log entries, continuously updating keymap, by the end the keymap will
 // reflect the state the index was in when it was closed or it crashed (assuming no data was corrupted during crash)
+// - close -> closes the storage log file
 
 // HashFunc is a hash func that takes a slice of bytes and returns a hash or an error
 type HashFunc func(key []byte) (string, error)
+
+type options struct {
+	sync time.Duration
+	file string
+	hash HashFunc
+}
 
 // DefaultHash is a HashFunc that uses the sha1 hashing algorithm
 func DefaultHash(key []byte) (string, error) {
@@ -54,6 +63,30 @@ func NoHash(key []byte) (string, error) {
 	return string(key), nil
 }
 
+// OptionFunc is func that modifies the server's configuration options
+type OptionFunc func(*options)
+
+// SyncInterval overrides the Index default sync interval
+func SyncInterval(dur time.Duration) OptionFunc {
+	return func(opts *options) {
+		opts.sync = dur
+	}
+}
+
+// StorageFile overrides the Index default storage file
+func StorageFile(name string) OptionFunc {
+	return func(opts *options) {
+		opts.file = name
+	}
+}
+
+// SetHashFunc overrides the Index default hashing func
+func SetHashFunc(hash HashFunc) OptionFunc {
+	return func(opts *options) {
+		opts.hash = hash
+	}
+}
+
 // Index is a hash index implementation
 type Index struct {
 	mtx    sync.RWMutex
@@ -61,14 +94,26 @@ type Index struct {
 	log    *os.File
 	offset int64
 	hash   HashFunc
+	done   chan struct{}
 }
 
 // NewIndex accepts a relative or absolute file name and a hash func.
 // It returns a configured Hash Index ready to start running operations.
-func NewIndex(file string, hash HashFunc) (*Index, error) {
-	filename, err := filepath.Abs(file)
+func NewIndex(opts ...OptionFunc) (*Index, error) {
+	// default config
+	cfg := &options{
+		sync: time.Second * 30,
+		file: "./data",
+		hash: NoHash,
+	}
+
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
+	filename, err := filepath.Abs(cfg.file)
 	if err != nil {
-		return nil, fmt.Errorf("could not get absolute path for dir: %s %v", file, err)
+		return nil, fmt.Errorf("could not get absolute path for dir: %s %v", cfg.file, err)
 	}
 
 	f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
@@ -76,12 +121,17 @@ func NewIndex(file string, hash HashFunc) (*Index, error) {
 		return nil, fmt.Errorf("could not create/open log file: %v", err)
 	}
 
+	done := make(chan struct{})
+
+	go synclog(cfg.sync, f, done)
+
 	return &Index{
 		mtx:    sync.RWMutex{},
 		keymap: make(map[string]int64),
 		log:    f,
 		offset: 0,
-		hash:   hash,
+		hash:   cfg.hash,
+		done:   done,
 	}, nil
 }
 
@@ -131,12 +181,6 @@ func (i *Index) Write(key []byte, val []byte) error {
 
 	// update the offset with the number of bytes written
 	i.offset += int64(n)
-
-	// write contents to stable storage
-	err = i.log.Sync()
-	if err != nil {
-		return err
-	}
 
 	return nil
 }
@@ -198,10 +242,15 @@ func (i *Index) Restore() error {
 
 // Close implements the io.Closer interface, it closes the log file
 func (i *Index) Close() error {
+	defer close(i.done)
+
 	err := i.log.Close()
 	if err != nil {
 		return err
 	}
+
+	// signal sync to stop
+	i.done <- struct{}{}
 
 	return nil
 }
@@ -219,4 +268,18 @@ func (i *Index) cleanup() error {
 	}
 
 	return nil
+}
+
+func synclog(interval time.Duration, f *os.File, done <-chan struct{}) {
+	for {
+		select {
+		case <-time.After(interval):
+			err := f.Sync()
+			if err != nil {
+				fmt.Println(err)
+			}
+		case <-done:
+			return
+		}
+	}
 }
