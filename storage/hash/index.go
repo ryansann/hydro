@@ -11,18 +11,27 @@ import (
 	"sync"
 
 	"github.com/golang/protobuf/proto"
-
 	"github.com/ryansann/hydro/storage/hash/pb"
 )
 
 // Hash Index with no segmentation / compaction
-// - uses single append only log (can grow boundlessly w/ no segmentation / compaction)
-// - keeps entire keyset in memory in keymap
-// - keymap maps a keys hash to its offset in the storage file
-// - read -> lookup key in keymap, find it's offset and seek to that location and read it's value
-// - write -> append write entry to log, update location in keymap
-// - delete -> append delete entry to log, remove entry from keymap
-// Note: in log file an entry is represented as -> <size:int32-little-endian><data:protobuf-encoded>
+// - uses single append only log (can grow boundlessly with no segmentation / compaction)
+// - keeps entire keyset in an in-memory map (Index.keymap)
+// - keymap maps a keys hash to its corresponding log entry's offset in the storage file
+//
+// Note: in log file an entry is represented as -> <size><data>
+// where size is a uint32 encoded in little endian to 4 bytes, storing the length in bytes of data,
+// and data is a pb.LogEntry marshaled to bytes
+// A log file looks like: <size><data><size><data>...<size><data><size><data>
+// No compaction implies that keys can and will appear multiple times, the most recent entry will reflect the actual state in the keymap
+//
+// Operations:
+// - read -> lookup key in keymap, find it's offset, read data size at offset, read data from offset+4, get value from data
+// - write -> create a log entry pb object, marshal it to bytes (wire format), get its size in bytes,
+// store its size and data bytes in log file as an entry, update or insert key/offset into keymap
+// - delete -> write a delete log entry (for restore purposes), remove key from keymap
+// - restore -> start from beginning of storage file, read all log entries, continuously updating keymap, by the end the keymap will
+// reflect the state the index was in when it was closed or it crashed (assuming no data was corrupted during crash)
 
 // HashFunc is a hash func that takes a slice of bytes and returns a hash or an error
 type HashFunc func(key []byte) (string, error)
@@ -54,7 +63,8 @@ type Index struct {
 	hash   HashFunc
 }
 
-// NewIndex returns a new hash index
+// NewIndex accepts a relative or absolute file name and a hash func.
+// It returns a configured Hash Index ready to start running operations.
 func NewIndex(file string, hash HashFunc) (*Index, error) {
 	filename, err := filepath.Abs(file)
 	if err != nil {

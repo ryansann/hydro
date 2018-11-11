@@ -90,7 +90,7 @@ func runIndexReadTest(t *testing.T, h HashFunc) {
 		}
 
 		if !reflect.DeepEqual(test.val, val) {
-			t.Logf("fail - expected: %s, but got: %s", string(test.val), string(val))
+			t.Logf("failure - expected: %s, but got: %s", string(test.val), string(val))
 			t.Fail()
 		}
 
