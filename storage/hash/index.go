@@ -109,11 +109,9 @@ func (i *Index) Write(key []byte, val []byte) error {
 	}
 
 	// write the size of the data to a new buffer
-	buf := bytes.NewBuffer(nil)
-	err = binary.Write(buf, binary.LittleEndian, int32(len(data)))
-	if err != nil {
-		return fmt.Errorf("could not write data size to buffer: %v", err)
-	}
+	sizebytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(sizebytes, uint32(len(data)))
+	buf := bytes.NewBuffer(sizebytes)
 
 	// write the data to the buffer
 	_, err = buf.Write(data)
@@ -158,20 +156,16 @@ func (i *Index) Read(key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("did not find key: %s in index", string(key))
 	}
 
-	size := make([]byte, 4) // data size is int32 (4 bytes)
-	_, err = i.log.ReadAt(size, offset)
+	sizebytes := make([]byte, 4) // data size is int32 (4 bytes)
+	_, err = i.log.ReadAt(sizebytes, offset)
 	if err != nil {
 		return nil, fmt.Errorf("could not read size at offset: %v, %v", offset, err)
 	}
 
-	var n int32
-	err = binary.Read(bytes.NewBuffer(size), binary.LittleEndian, n)
-	if err != nil {
-		return nil, fmt.Errorf("could not get size from bytes: %v", err)
-	}
+	size := binary.LittleEndian.Uint32(sizebytes)
 
-	data := make([]byte, n)
-	_, err = i.log.ReadAt(data, offset+int64(n))
+	data := make([]byte, size)
+	_, err = i.log.ReadAt(data, offset+4) // add 4 bytes since we read uint32 size already
 	if err != nil {
 		return nil, fmt.Errorf("could not read data from file: %v", err)
 	}
