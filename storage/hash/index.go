@@ -12,7 +12,6 @@ import (
 
 	"github.com/golang/protobuf/proto"
 
-	"github.com/google/uuid"
 	"github.com/ryansann/hydro/storage/hash/pb"
 )
 
@@ -23,8 +22,7 @@ import (
 // - read -> lookup key in keymap, find it's offset and seek to that location and read it's value
 // - write -> append write entry to log, update location in keymap
 // - delete -> append delete entry to log, remove entry from keymap
-
-// Log Entry: <size:int32-little-endian><data:protobuf-encoded>
+// Note: in log file an entry is represented as -> <size:int32-little-endian><data:protobuf-encoded>
 
 // HashFunc is a hash func that takes a slice of bytes and returns a hash or an error
 type HashFunc func(key []byte) (string, error)
@@ -56,21 +54,14 @@ type Index struct {
 	hash   HashFunc
 }
 
-// New returns a new hash index
-func New(dir string, hash HashFunc) (*Index, error) {
-	logpath, err := filepath.Abs(dir)
+// NewIndex returns a new hash index
+func NewIndex(file string, hash HashFunc) (*Index, error) {
+	filename, err := filepath.Abs(file)
 	if err != nil {
-		return nil, fmt.Errorf("could not get absolute path for dir: %s %v", dir, err)
+		return nil, fmt.Errorf("could not get absolute path for dir: %s %v", file, err)
 	}
 
-	filename, err := uuid.NewRandom()
-	if err != nil {
-		return nil, fmt.Errorf("could not generate logfile name: %v", err)
-	}
-
-	file := logpath + "/" + filename.String()
-
-	f, err := os.OpenFile(file, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
+	f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
 		return nil, fmt.Errorf("could not create/open log file: %v", err)
 	}
@@ -151,31 +142,37 @@ func (i *Index) Read(key []byte) ([]byte, error) {
 		return nil, err
 	}
 
+	// get the offset from the map, if we don't find it we don't have the key
 	offset, ok := i.keymap[hash]
 	if !ok {
 		return nil, fmt.Errorf("did not find key: %s in index", string(key))
 	}
 
-	sizebytes := make([]byte, 4) // data size is int32 (4 bytes)
+	// read the bytes storing the size of the data
+	sizebytes := make([]byte, 4) // stored as uint32 (4 bytes)
 	_, err = i.log.ReadAt(sizebytes, offset)
 	if err != nil {
 		return nil, fmt.Errorf("could not read size at offset: %v, %v", offset, err)
 	}
 
+	// convert the bytes to a uint32
 	size := binary.LittleEndian.Uint32(sizebytes)
 
+	// read the data (protobuf) bytes
 	data := make([]byte, size)
 	_, err = i.log.ReadAt(data, offset+4) // add 4 bytes since we read uint32 size already
 	if err != nil {
 		return nil, fmt.Errorf("could not read data from file: %v", err)
 	}
 
+	// unmarshal the data bytes into LogEntry data structure
 	var entry pb.LogEntry
 	err = proto.Unmarshal(data, &entry)
 	if err != nil {
 		return nil, fmt.Errorf("could not unmarshal data into log entry: %v", err)
 	}
 
+	// return the value for the key
 	return entry.GetValue(), nil
 }
 

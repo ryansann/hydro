@@ -41,7 +41,7 @@ func TestIndexWrite(t *testing.T) {
 }
 
 func runIndexWriteTest(t *testing.T, h HashFunc) {
-	hi1, err := New(".", h)
+	hi1, err := NewIndex("./data", h)
 	defer hi1.cleanup()
 	if err != nil {
 		t.Log(err)
@@ -65,7 +65,7 @@ func TestIndexRead(t *testing.T) {
 }
 
 func runIndexReadTest(t *testing.T, h HashFunc) {
-	hi, err := New(".", h)
+	hi, err := NewIndex("./data", h)
 	defer hi.cleanup()
 	if err != nil {
 		t.Log(err)
