@@ -184,6 +184,11 @@ func (i *Index) Delete(key []byte) error {
 	return nil
 }
 
+// Restore parses the log stored on disk and restores the inmemory keymap
+func (i *Index) Restore() error {
+	return nil
+}
+
 // Close implements the io.Closer interface, it closes the log file
 func (i *Index) Close() error {
 	err := i.log.Close()
@@ -194,6 +199,7 @@ func (i *Index) Close() error {
 	return nil
 }
 
+// cleanup is a utility for testing that closes and removes the storage log file
 func (i *Index) cleanup() error {
 	err := i.Close()
 	if err != nil {

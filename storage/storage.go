@@ -10,5 +10,6 @@ type Storer interface {
 	Write(key []byte, val []byte) error
 	Read(key []byte) ([]byte, error)
 	Delete(key []byte) error
+	Restore() error
 	io.Closer
 }

@@ -36,15 +36,13 @@ var (
 )
 
 func TestIndexWrite(t *testing.T) {
-	hi1, err := New(".", NoHash)
-	defer hi1.cleanup()
-	if err != nil {
-		t.Log(err)
-		t.Fail()
-	}
+	runIndexWriteTest(t, NoHash)
+	runIndexWriteTest(t, DefaultHash)
+}
 
-	hi2, err := New(".", DefaultHash)
-	defer hi2.cleanup()
+func runIndexWriteTest(t *testing.T, h HashFunc) {
+	hi1, err := New(".", h)
+	defer hi1.cleanup()
 	if err != nil {
 		t.Log(err)
 		t.Fail()
@@ -57,16 +55,17 @@ func TestIndexWrite(t *testing.T) {
 			t.Fail()
 		}
 
-		err = hi2.Write(test.key, test.val)
-		if err != nil {
-			t.Log(err)
-			t.Fail()
-		}
+		t.Logf("success - write for key: %s", string(test.key))
 	}
 }
 
 func TestIndexRead(t *testing.T) {
-	hi, err := New(".", NoHash)
+	runIndexReadTest(t, NoHash)
+	runIndexReadTest(t, DefaultHash)
+}
+
+func runIndexReadTest(t *testing.T, h HashFunc) {
+	hi, err := New(".", h)
 	defer hi.cleanup()
 	if err != nil {
 		t.Log(err)
