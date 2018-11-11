@@ -123,7 +123,7 @@ func NewIndex(opts ...OptionFunc) (*Index, error) {
 
 	done := make(chan struct{})
 
-	go synclog(cfg.sync, f, done)
+	go syncloop(cfg.sync, f, done)
 
 	return &Index{
 		mtx:    sync.RWMutex{},
@@ -281,6 +281,7 @@ func (i *Index) append(entry *pb.LogEntry) (int64, error) {
 	return int64(n), nil
 }
 
+// read reads the log at offset and returns the entry's value or an error
 func (i *Index) read(offset int64) ([]byte, error) {
 	// read the bytes storing the size of the data
 	sizebytes := make([]byte, 4) // stored as uint32 (4 bytes)
@@ -324,7 +325,8 @@ func (i *Index) cleanup() error {
 	return nil
 }
 
-func synclog(interval time.Duration, f *os.File, done <-chan struct{}) {
+// syncloop is intended to be run as a background go routine that flushes data to disk every interval
+func syncloop(interval time.Duration, f *os.File, done <-chan struct{}) {
 	for {
 		select {
 		case <-time.After(interval):
