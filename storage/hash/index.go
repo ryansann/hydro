@@ -137,9 +137,6 @@ func NewIndex(opts ...OptionFunc) (*Index, error) {
 
 // Write appends the key, value to the log and updates the keymap
 func (i *Index) Write(key []byte, val []byte) error {
-	i.mtx.Lock()
-	defer i.mtx.Unlock()
-
 	// get the key's hash
 	hash, err := i.hash(key)
 	if err != nil {
@@ -153,48 +150,34 @@ func (i *Index) Write(key []byte, val []byte) error {
 		Value: val,
 	}
 
-	// marshal the data into protobuf format
-	data, err := proto.Marshal(entry)
-	if err != nil {
-		return fmt.Errorf("could not marshal log entry: %v", err)
-	}
+	i.mtx.Lock()
+	defer i.mtx.Unlock()
 
-	// write the size of the data to a new buffer
-	sizebytes := make([]byte, 4)
-	binary.LittleEndian.PutUint32(sizebytes, uint32(len(data)))
-	buf := bytes.NewBuffer(sizebytes)
-
-	// write the data to the buffer
-	_, err = buf.Write(data)
+	// append entry to storage log
+	n, err := i.append(entry)
 	if err != nil {
-		return fmt.Errorf("could not write data to buffer: %v", err)
-	}
-
-	// write the data to the file
-	n, err := i.log.Write(buf.Bytes())
-	if err != nil {
-		return fmt.Errorf("could not write log entry: %v", err)
+		return err
 	}
 
 	// store the offset where we started writing
 	i.keymap[hash] = i.offset
 
 	// update the offset with the number of bytes written
-	i.offset += int64(n)
+	i.offset += n
 
 	return nil
 }
 
 // Read looksup the key in the log and returns the value or an error if it wasn't found
 func (i *Index) Read(key []byte) ([]byte, error) {
-	i.mtx.RLock()
-	defer i.mtx.RUnlock()
-
 	// get the key's hash
 	hash, err := i.hash(key)
 	if err != nil {
 		return nil, err
 	}
+
+	i.mtx.RLock()
+	defer i.mtx.RUnlock()
 
 	// get the offset from the map, if we don't find it we don't have the key
 	offset, ok := i.keymap[hash]
@@ -202,36 +185,51 @@ func (i *Index) Read(key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("did not find key: %s in index", string(key))
 	}
 
-	// read the bytes storing the size of the data
-	sizebytes := make([]byte, 4) // stored as uint32 (4 bytes)
-	_, err = i.log.ReadAt(sizebytes, offset)
+	val, err := i.read(offset)
 	if err != nil {
-		return nil, fmt.Errorf("could not read size at offset: %v, %v", offset, err)
-	}
-
-	// convert the bytes to a uint32
-	size := binary.LittleEndian.Uint32(sizebytes)
-
-	// read the data (protobuf) bytes
-	data := make([]byte, size)
-	_, err = i.log.ReadAt(data, offset+4) // add 4 bytes since we read uint32 size already
-	if err != nil {
-		return nil, fmt.Errorf("could not read data from file: %v", err)
-	}
-
-	// unmarshal the data bytes into LogEntry data structure
-	var entry pb.LogEntry
-	err = proto.Unmarshal(data, &entry)
-	if err != nil {
-		return nil, fmt.Errorf("could not unmarshal data into log entry: %v", err)
+		return nil, err
 	}
 
 	// return the value for the key
-	return entry.GetValue(), nil
+	return val, nil
 }
 
 // Delete removes the key from the keymap
 func (i *Index) Delete(key []byte) error {
+	// get the key's hash
+	hash, err := i.hash(key)
+	if err != nil {
+		return err
+	}
+
+	i.mtx.Lock()
+	defer i.mtx.Unlock()
+
+	// check if we have a key to delete, if we don't it's an error
+	_, ok := i.keymap[hash]
+	if !ok {
+		return fmt.Errorf("nothing to delete for key: %s", string(key))
+	}
+
+	// create our log entry contents
+	entry := &pb.LogEntry{
+		Type:  pb.EntryType_DELETE,
+		Key:   hash,
+		Value: []byte{},
+	}
+
+	// append data to storage log
+	n, err := i.append(entry)
+	if err != nil {
+		return err
+	}
+
+	// remove key from map
+	delete(i.keymap, hash)
+
+	// update the offset with the number of bytes written
+	i.offset += n
+
 	return nil
 }
 
@@ -253,6 +251,62 @@ func (i *Index) Close() error {
 	}
 
 	return nil
+}
+
+// append writes a log entry to the storage log and returns how many bytes it wrote or an error
+func (i *Index) append(entry *pb.LogEntry) (int64, error) {
+	// marshal the data into protobuf format
+	data, err := proto.Marshal(entry)
+	if err != nil {
+		return 0, fmt.Errorf("could not marshal log entry: %v", err)
+	}
+
+	// write the size of the data to a new buffer
+	sizebytes := make([]byte, 4)
+	binary.LittleEndian.PutUint32(sizebytes, uint32(len(data)))
+	buf := bytes.NewBuffer(sizebytes)
+
+	// write the data to the buffer
+	_, err = buf.Write(data)
+	if err != nil {
+		return 0, fmt.Errorf("could not write data to buffer: %v", err)
+	}
+
+	// write the data to the file
+	n, err := i.log.Write(buf.Bytes())
+	if err != nil {
+		return 0, fmt.Errorf("could not write log entry: %v", err)
+	}
+
+	return int64(n), nil
+}
+
+func (i *Index) read(offset int64) ([]byte, error) {
+	// read the bytes storing the size of the data
+	sizebytes := make([]byte, 4) // stored as uint32 (4 bytes)
+	_, err := i.log.ReadAt(sizebytes, offset)
+	if err != nil {
+		return nil, fmt.Errorf("could not read size at offset: %v, %v", offset, err)
+	}
+
+	// convert the bytes to a uint32
+	size := binary.LittleEndian.Uint32(sizebytes)
+
+	// read the data (protobuf) bytes
+	data := make([]byte, size)
+	_, err = i.log.ReadAt(data, offset+4) // add 4 bytes since we read uint32 size already
+	if err != nil {
+		return nil, fmt.Errorf("could not read data from file: %v", err)
+	}
+
+	// unmarshal the data bytes into LogEntry data structure
+	var entry pb.LogEntry
+	err = proto.Unmarshal(data, &entry)
+	if err != nil {
+		return nil, fmt.Errorf("could not unmarshal data into log entry: %v", err)
+	}
+
+	return entry.GetValue(), nil
 }
 
 // cleanup is a utility for testing that closes and removes the storage log file
