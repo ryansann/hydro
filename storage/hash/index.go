@@ -40,12 +40,6 @@ import (
 // HashFunc is a hash func that takes a slice of bytes and returns a hash or an error
 type HashFunc func(key []byte) (string, error)
 
-type options struct {
-	sync time.Duration
-	file string
-	hash HashFunc
-}
-
 // DefaultHash is a HashFunc that uses the sha1 hashing algorithm
 func DefaultHash(key []byte) (string, error) {
 	h := sha1.New()
@@ -62,6 +56,13 @@ func DefaultHash(key []byte) (string, error) {
 // NoHash is a HashFunc that returns the key as a string without hashing
 func NoHash(key []byte) (string, error) {
 	return string(key), nil
+}
+
+type options struct {
+	sync    time.Duration
+	file    string
+	hash    HashFunc
+	restore bool
 }
 
 // OptionFunc is func that modifies the server's configuration options
@@ -88,6 +89,12 @@ func SetHashFunc(hash HashFunc) OptionFunc {
 	}
 }
 
+func NoRestore() OptionFunc {
+	return func(opts *options) {
+		opts.restore = false
+	}
+}
+
 // Index is a hash index implementation
 type Index struct {
 	mtx    sync.RWMutex
@@ -103,12 +110,13 @@ type Index struct {
 func NewIndex(opts ...OptionFunc) (*Index, error) {
 	// default config
 	cfg := &options{
-		sync: time.Second * 30,
-		file: "./data",
-		hash: NoHash,
+		sync:    time.Second * 30,
+		file:    "./data",
+		hash:    NoHash,
+		restore: true,
 	}
 
-	restore := false
+	canrestore := false
 
 	for _, opt := range opts {
 		opt(cfg)
@@ -119,9 +127,9 @@ func NewIndex(opts ...OptionFunc) (*Index, error) {
 		return nil, fmt.Errorf("could not get absolute path for dir: %s %v", cfg.file, err)
 	}
 
-	// if the file already exists we should restore the index state from it
+	// if the file already exists we can restore the index state from it
 	if _, err := os.Stat(filename); !os.IsNotExist(err) {
-		restore = true
+		canrestore = true
 	}
 
 	f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
@@ -142,7 +150,7 @@ func NewIndex(opts ...OptionFunc) (*Index, error) {
 		done:   done,
 	}
 
-	if restore {
+	if cfg.restore && canrestore {
 		err := i.Restore()
 		if err != nil {
 			return nil, err
