@@ -41,7 +41,7 @@ func TestIndexWrite(t *testing.T) {
 }
 
 func runIndexWriteTest(t *testing.T, h HashFunc) {
-	hi1, err := NewIndex()
+	hi1, err := NewIndex(SetHashFunc(h))
 	defer hi1.cleanup()
 	if err != nil {
 		t.Log(err)
@@ -65,7 +65,7 @@ func TestIndexRead(t *testing.T) {
 }
 
 func runIndexReadTest(t *testing.T, h HashFunc) {
-	hi, err := NewIndex()
+	hi, err := NewIndex(SetHashFunc(h))
 	defer hi.cleanup()
 	if err != nil {
 		t.Log(err)
@@ -98,6 +98,47 @@ func runIndexReadTest(t *testing.T, h HashFunc) {
 	}
 }
 
+func TestIndexDelete(t *testing.T) {
+	runIndexDeleteTest(t, NoHash)
+	runIndexDeleteTest(t, DefaultHash)
+}
+
+func runIndexDeleteTest(t *testing.T, h HashFunc) {
+	hi, err := NewIndex(SetHashFunc(h))
+	defer hi.cleanup()
+	if err != nil {
+		t.Log(err)
+		t.Fail()
+	}
+
+	for _, test := range kvs {
+		err := hi.Write(test.key, test.val)
+		if err != nil {
+			t.Log(err)
+			t.Fail()
+		}
+
+		err = hi.Delete(test.key)
+		if err != nil {
+			t.Log(err)
+			t.Fail()
+		}
+
+		key, err := h(test.key)
+		if err != nil {
+			t.Log(err)
+			t.Fail()
+		}
+
+		if _, ok := hi.keymap[key]; ok {
+			t.Logf("expected key: %s to be deleted", string(test.key))
+			t.Fail()
+		}
+
+		t.Logf("success - key: %s deleted", string(test.key))
+	}
+}
+
 // We can do 100,000+ writes a second - 9,730 ns/op
 func BenchmarkIndexWrite(b *testing.B) {
 	b.N = 100000 // we don't want to claim too much disk space (e.g. b = 10,000,000)
@@ -109,7 +150,7 @@ func BenchmarkIndexWrite(b *testing.B) {
 func runBenchIndexWrite(b *testing.B, h HashFunc) {
 	k, v := []byte("key"), []byte("val")
 
-	hi, err := NewIndex()
+	hi, err := NewIndex(SetHashFunc(h))
 	defer hi.cleanup()
 
 	if err != nil {
