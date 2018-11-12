@@ -347,7 +347,7 @@ func (i *Index) read(offset int64) (*pb.LogEntry, int, error) {
 	sizebytes := make([]byte, 4) // stored as uint32 (4 bytes)
 	_, err := i.log.ReadAt(sizebytes, offset)
 	if err != nil {
-		return nil, 0, fmt.Errorf("could not read size at offset: %v, %v", offset, err)
+		return nil, 0, err
 	}
 
 	// convert the bytes to a uint32
