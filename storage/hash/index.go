@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -107,6 +108,8 @@ func NewIndex(opts ...OptionFunc) (*Index, error) {
 		hash: NoHash,
 	}
 
+	restore := false
+
 	for _, opt := range opts {
 		opt(cfg)
 	}
@@ -114,6 +117,11 @@ func NewIndex(opts ...OptionFunc) (*Index, error) {
 	filename, err := filepath.Abs(cfg.file)
 	if err != nil {
 		return nil, fmt.Errorf("could not get absolute path for dir: %s %v", cfg.file, err)
+	}
+
+	// if the file already exists we should restore the index state from it
+	if _, err := os.Stat(filename); !os.IsNotExist(err) {
+		restore = true
 	}
 
 	f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
@@ -125,14 +133,23 @@ func NewIndex(opts ...OptionFunc) (*Index, error) {
 
 	go syncloop(cfg.sync, f, done)
 
-	return &Index{
+	i := &Index{
 		mtx:    sync.RWMutex{},
 		keymap: make(map[string]int64),
 		log:    f,
 		offset: 0,
 		hash:   cfg.hash,
 		done:   done,
-	}, nil
+	}
+
+	if restore {
+		err := i.Restore()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return i, nil
 }
 
 // Write appends the key, value to the log and updates the keymap
@@ -185,13 +202,13 @@ func (i *Index) Read(key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("did not find key: %s in index", string(key))
 	}
 
-	val, err := i.read(offset)
+	e, _, err := i.read(offset)
 	if err != nil {
 		return nil, err
 	}
 
 	// return the value for the key
-	return val, nil
+	return e.GetValue(), nil
 }
 
 // Delete removes the key from the keymap
@@ -233,8 +250,43 @@ func (i *Index) Delete(key []byte) error {
 	return nil
 }
 
-// Restore parses the log stored on disk and restores the inmemory keymap
+// Restore reads the storage log and restores the inmemory keymap
 func (i *Index) Restore() error {
+	i.mtx.Lock()
+	defer i.mtx.Unlock()
+
+	var offset int64
+	var readerr error
+	done := false
+
+	for {
+		// read entries from file until we encounter an eof or an unexpected error
+		e, n, err := i.read(offset)
+		if err != nil {
+			if err == io.EOF {
+				done = true
+				break
+			}
+			readerr = err
+			break
+		}
+
+		// only add it to keymap if it was a write operation, deletes won't be added
+		if e.GetType() == pb.EntryType_WRITE {
+			i.keymap[e.GetKey()] = offset
+		}
+
+		offset += int64(n) // add bytes read to offset
+	}
+
+	// if we encountered an unexpected error, return it
+	if !done {
+		return readerr
+	}
+
+	// set the offset to the end of the file
+	i.offset = offset
+
 	return nil
 }
 
@@ -282,12 +334,12 @@ func (i *Index) append(entry *pb.LogEntry) (int64, error) {
 }
 
 // read reads the log at offset and returns the entry's value or an error
-func (i *Index) read(offset int64) ([]byte, error) {
+func (i *Index) read(offset int64) (*pb.LogEntry, int, error) {
 	// read the bytes storing the size of the data
 	sizebytes := make([]byte, 4) // stored as uint32 (4 bytes)
 	_, err := i.log.ReadAt(sizebytes, offset)
 	if err != nil {
-		return nil, fmt.Errorf("could not read size at offset: %v, %v", offset, err)
+		return nil, 0, fmt.Errorf("could not read size at offset: %v, %v", offset, err)
 	}
 
 	// convert the bytes to a uint32
@@ -297,17 +349,17 @@ func (i *Index) read(offset int64) ([]byte, error) {
 	data := make([]byte, size)
 	_, err = i.log.ReadAt(data, offset+4) // add 4 bytes since we read uint32 size already
 	if err != nil {
-		return nil, fmt.Errorf("could not read data from file: %v", err)
+		return nil, 0, err // keep error as is so we can detect io.EOF
 	}
 
 	// unmarshal the data bytes into LogEntry data structure
 	var entry pb.LogEntry
 	err = proto.Unmarshal(data, &entry)
 	if err != nil {
-		return nil, fmt.Errorf("could not unmarshal data into log entry: %v", err)
+		return nil, 0, fmt.Errorf("could not unmarshal data into log entry: %v", err)
 	}
 
-	return entry.GetValue(), nil
+	return &entry, 4 + len(data), nil
 }
 
 // cleanup is a utility for testing that closes and removes the storage log file
