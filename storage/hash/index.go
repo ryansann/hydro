@@ -89,6 +89,7 @@ func SetHashFunc(hash HashFunc) OptionFunc {
 	}
 }
 
+// NoRestore tells the Index not to restore the keymap from the storage log if it exists already
 func NoRestore() OptionFunc {
 	return func(opts *options) {
 		opts.restore = false
