@@ -2,6 +2,7 @@ package tcp
 
 import (
 	"log"
+	"net"
 	"os"
 
 	"github.com/ryansann/hydro/storage"
@@ -44,6 +45,8 @@ type Server struct {
 	port  string
 	log   *log.Logger
 	store storage.Storer
+	close chan struct{}
+	conns chan net.Conn
 }
 
 // NewServer returns a configured Server instance ready to start serving
@@ -67,10 +70,63 @@ func NewServer(opts ...OptionFunc) (*Server, error) {
 		port:  cfg.port,
 		log:   cfg.log,
 		store: cfg.store,
+		close: make(chan struct{}),
+		conns: make(chan net.Conn),
 	}, nil
 }
 
 // Serve starts the server
 func (s *Server) Serve() {
+	s.log.Println("accepting connections")
 
+	ln, err := net.Listen("tcp", s.port)
+	if err != nil {
+		s.log.Fatalf("fatal: %v\n", err)
+	}
+
+	go s.acceptConns(ln)
+
+	for {
+		select {
+		case <-s.close:
+			s.log.Println("closing")
+
+			err := ln.Close()
+			if err != nil {
+				s.log.Printf("error closing listener: %v\n", err)
+			}
+
+			err = s.store.Close()
+			if err != nil {
+				s.log.Printf("error closing store: %v\n", err)
+			}
+
+			return
+		case c := <-s.conns:
+			go s.handleConn(c)
+		}
+	}
+}
+
+// Close triggers the server to stop accepting connections and close its store
+func (s *Server) Close() error {
+	defer close(s.close)
+	s.close <- struct{}{}
+	return nil
+}
+
+func (s *Server) acceptConns(ln net.Listener) {
+	for {
+		c, err := ln.Accept()
+		if err != nil {
+			s.log.Printf("error accepting connection: %v\n", err)
+			continue
+		}
+
+		s.conns <- c
+	}
+}
+
+func (s *Server) handleConn(c net.Conn) {
+	s.log.Println("handling connection")
 }

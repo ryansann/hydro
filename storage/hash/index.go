@@ -106,7 +106,7 @@ type Index struct {
 	done   chan struct{}
 }
 
-// NewIndex accepts a relative or absolute file name and a hash func.
+// NewIndex accepts a variadic number of option funcs for configuration.
 // It returns a configured Hash Index ready to start running operations.
 func NewIndex(opts ...OptionFunc) (*Index, error) {
 	// default config
