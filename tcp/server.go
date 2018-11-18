@@ -16,9 +16,11 @@ import (
 type OptionFunc func(*options)
 
 type options struct {
-	port  string
-	log   *log.Logger
-	store storage.Storer
+	port            string
+	log             *log.Logger
+	store           storage.Storer
+	readtimeout     time.Duration
+	shutdowntimeout time.Duration
 }
 
 // Port overrides the default port ":8080"
@@ -42,16 +44,36 @@ func Logger(l *log.Logger) OptionFunc {
 	}
 }
 
+// ReadTimeout overrides the default read timeout to the duration passed in
+// If overriding ShutdownTimeout as well, ReadTimeout should be greater than ShutdownTimeout
+func ReadTimeout(t time.Duration) OptionFunc {
+	return func(opts *options) {
+		opts.readtimeout = t
+	}
+}
+
+// ShutdownTimeout overrides the default value for how long the server will wait for connections
+// to finish being handled before forcefully shutting down (Server.Serve exits).
+// If ReadTimeout > ShutdownTimeout there may be cases where connections don't get enough time to close
+// before Server.Serve exits.
+func ShutdownTimeout(t time.Duration) OptionFunc {
+	return func(opts *options) {
+		opts.shutdowntimeout = t
+	}
+}
+
 // Server is a tcp server that receives commands and interacts
 // with a storage layer
 type Server struct {
-	port     string
-	log      *log.Logger
-	store    storage.Storer
-	close    chan struct{}
-	exited   chan struct{}
-	ln       net.Listener
-	handlers sync.WaitGroup
+	port            string
+	log             *log.Logger
+	store           storage.Storer
+	ln              net.Listener
+	handlers        sync.WaitGroup
+	readtimeout     time.Duration
+	shutdowntimeout time.Duration
+	close           chan struct{}
+	exited          chan struct{}
 }
 
 // NewServer returns a configured Server instance ready to start serving
@@ -62,9 +84,11 @@ func NewServer(opts ...OptionFunc) (*Server, error) {
 	}
 
 	cfg := &options{
-		port:  ":8080",
-		log:   log.New(os.Stdout, "server ", log.LstdFlags|log.Lshortfile),
-		store: store,
+		port:            ":8080",
+		log:             log.New(os.Stdout, "", log.LstdFlags|log.Lshortfile),
+		store:           store,
+		readtimeout:     time.Second * 15,
+		shutdowntimeout: time.Second * 20,
 	}
 
 	for _, opt := range opts {
@@ -72,19 +96,21 @@ func NewServer(opts ...OptionFunc) (*Server, error) {
 	}
 
 	return &Server{
-		port:     cfg.port,
-		log:      cfg.log,
-		store:    cfg.store,
-		close:    make(chan struct{}),
-		exited:   make(chan struct{}),
-		handlers: sync.WaitGroup{},
+		port:            cfg.port,
+		log:             cfg.log,
+		store:           cfg.store,
+		handlers:        sync.WaitGroup{},
+		readtimeout:     cfg.readtimeout,
+		shutdowntimeout: cfg.shutdowntimeout,
+		close:           make(chan struct{}),
+		exited:          make(chan struct{}),
 	}, nil
 }
 
 // Serve starts the server
 func (s *Server) Serve() {
 	defer func() {
-		if ok := s.wait(time.Second * 10); ok {
+		if ok := s.wait(); ok {
 			s.log.Println("connection handlers exited normally")
 		} else {
 			s.log.Println("timed out waiting for connection handlers to exit")
@@ -156,12 +182,25 @@ func (s *Server) handle(c net.Conn) {
 
 		s.handlers.Done()
 	}()
+	// Make a buffer to hold incoming data.
+	buf := make([]byte, 1024)
 
-	s.log.Printf("handling connection from: %v\n", c.RemoteAddr())
+	c.SetReadDeadline(time.Now().Add(s.readtimeout))
+
+	// Read the incoming connection into the buffer.
+	nbytes, err := c.Read(buf)
+	if err != nil {
+		s.log.Printf("error reading: %v\n", err)
+	}
+
+	s.log.Printf("read %v bytes: %s", nbytes, string(buf))
+
+	// Send a response back to person contacting us.
+	c.Write([]byte("received"))
 }
 
 // wait waits for wg waiting finishes normally it returns true, otherwise it returns false.
-func (s *Server) wait(timeout time.Duration) bool {
+func (s *Server) wait() bool {
 	c := make(chan struct{})
 	go func() {
 		defer close(c)
@@ -170,7 +209,7 @@ func (s *Server) wait(timeout time.Duration) bool {
 	select {
 	case <-c:
 		return true // completed normally
-	case <-time.After(timeout):
+	case <-time.After(s.shutdowntimeout):
 		return false // timed out
 	}
 }
