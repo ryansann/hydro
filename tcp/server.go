@@ -68,6 +68,7 @@ func ShutdownTimeout(t time.Duration) OptionFunc {
 // Server is a tcp server that receives commands and interacts
 // with a storage layer
 type Server struct {
+	mtx             sync.Mutex
 	port            string
 	log             *log.Logger
 	store           storage.Storer
@@ -99,6 +100,7 @@ func NewServer(opts ...OptionFunc) (*Server, error) {
 	}
 
 	return &Server{
+		mtx:             sync.Mutex{},
 		port:            cfg.port,
 		log:             cfg.log,
 		store:           cfg.store,
@@ -128,7 +130,9 @@ func (s *Server) Serve() {
 		s.log.Fatalf("fatal: %v\n", err)
 	}
 
+	s.mtx.Lock()
 	s.ln = ln
+	s.mtx.Unlock()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -166,6 +170,9 @@ func (s *Server) Serve() {
 
 // Close triggers the server to stop accepting connections and close its store
 func (s *Server) Close() error {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+
 	err := s.ln.Close()
 	if err != nil {
 		s.log.Printf("error closing listener: %v\n", err)
@@ -208,15 +215,19 @@ func (s *Server) handle(ctx context.Context, c *conn) {
 	for {
 		select {
 		case <-ctx.Done():
+			c.Write([]byte("CLOSING\n"))
 			return
 		case <-c.close:
+			c.Write([]byte("QUITTING\n"))
 			return
 		default:
 			c.SetReadDeadline(time.Now().Add(s.readtimeout))
 
 			l, _, err := reader.ReadLine()
 			if err != nil {
-				s.log.Printf("error reading conn: %v\n", err)
+				if strings.Contains(err.Error(), "i/o timeout") {
+					s.log.Println("read timeout")
+				}
 				return
 			}
 
@@ -229,7 +240,7 @@ func (s *Server) handle(ctx context.Context, c *conn) {
 
 			res, err := cmd.execute(c.close, s.store)
 			if err != nil {
-				s.log.Printf("failed to execute command: %v\n", cmd)
+				s.log.Printf("failed to execute command: %s %s %s\n", commandtypes[cmd.op], cmd.key, cmd.val)
 				c.Write([]byte(fmt.Sprintf("EXECUTE FAILED: %v\n", err)))
 				continue
 			}
@@ -266,6 +277,13 @@ const (
 	del
 	quit
 )
+
+var commandtypes = map[commandtype]string{
+	get:  "get",
+	set:  "set",
+	del:  "del",
+	quit: "quit",
+}
 
 type command struct {
 	op  commandtype
