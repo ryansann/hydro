@@ -1,6 +1,9 @@
 package tcp
 
 import (
+	"bufio"
+	"context"
+	"fmt"
 	"log"
 	"net"
 	"os"
@@ -127,6 +130,8 @@ func (s *Server) Serve() {
 
 	s.ln = ln
 
+	ctx, cancel := context.WithCancel(context.Background())
+
 	for {
 		// ln.Accept returns an error when we close the listener, this is strange behavior
 		c, err := ln.Accept()
@@ -146,12 +151,15 @@ func (s *Server) Serve() {
 					s.log.Printf("error closing store: %v\n", err)
 				}
 
+				// close open connections
+				cancel()
+
 				return
 			default:
 			}
 		} else {
 			s.handlers.Add(1)
-			go s.handle(c)
+			go s.handle(ctx, newconn(c))
 		}
 	}
 }
@@ -171,7 +179,19 @@ func (s *Server) Close() error {
 	return nil
 }
 
-func (s *Server) handle(c net.Conn) {
+type conn struct {
+	net.Conn
+	close chan struct{}
+}
+
+func newconn(c net.Conn) *conn {
+	return &conn{
+		c,
+		make(chan struct{}),
+	}
+}
+
+func (s *Server) handle(ctx context.Context, c *conn) {
 	defer func() {
 		s.log.Printf("closing connection from: %v\n", c.RemoteAddr())
 
@@ -182,21 +202,45 @@ func (s *Server) handle(c net.Conn) {
 
 		s.handlers.Done()
 	}()
-	// Make a buffer to hold incoming data.
-	buf := make([]byte, 1024)
 
-	c.SetReadDeadline(time.Now().Add(s.readtimeout))
+	reader := bufio.NewReaderSize(c, 4<<8)
 
-	// Read the incoming connection into the buffer.
-	nbytes, err := c.Read(buf)
-	if err != nil {
-		s.log.Printf("error reading: %v\n", err)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.close:
+			return
+		default:
+			c.SetReadDeadline(time.Now().Add(s.readtimeout))
+
+			l, _, err := reader.ReadLine()
+			if err != nil {
+				s.log.Printf("error reading conn: %v\n", err)
+				return
+			}
+
+			cmd, err := parsecommand(string(l))
+			if err != nil {
+				s.log.Println("failed to parse command")
+				c.Write([]byte(fmt.Sprintf("PARSE FAILED: %v\n", err)))
+				continue
+			}
+
+			res, err := cmd.execute(c.close, s.store)
+			if err != nil {
+				s.log.Printf("failed to execute command: %v\n", cmd)
+				c.Write([]byte(fmt.Sprintf("EXECUTE FAILED: %v\n", err)))
+				continue
+			}
+
+			if res != "" {
+				c.Write([]byte(fmt.Sprintf("%s\n", res)))
+			} else {
+				c.Write([]byte("SUCCESS\n"))
+			}
+		}
 	}
-
-	s.log.Printf("read %v bytes: %s", nbytes, string(buf))
-
-	// Send a response back to person contacting us.
-	c.Write([]byte("received"))
 }
 
 // wait waits for wg waiting finishes normally it returns true, otherwise it returns false.
@@ -211,5 +255,88 @@ func (s *Server) wait() bool {
 		return true // completed normally
 	case <-time.After(s.shutdowntimeout):
 		return false // timed out
+	}
+}
+
+type commandtype int
+
+const (
+	get = iota
+	set
+	del
+	quit
+)
+
+type command struct {
+	op  commandtype
+	key string
+	val string
+}
+
+func parsecommand(l string) (*command, error) {
+	cmps := strings.Split(l, " ")
+	if len(cmps) < 1 {
+		return nil, fmt.Errorf("command must have an operation")
+	}
+
+	cmd := &command{}
+
+	switch strings.ToLower(cmps[0]) {
+	case "get":
+		cmd.op = commandtype(get)
+		if len(cmps) != 2 {
+			return nil, fmt.Errorf("get command requires an argument")
+		}
+		cmd.key = cmps[1]
+	case "set":
+		cmd.op = commandtype(set)
+		if len(cmps) != 3 {
+			return nil, fmt.Errorf("set command requires 2 arguments")
+		}
+		cmd.key = cmps[1]
+		cmd.val = cmps[2]
+	case "del":
+		cmd.op = commandtype(del)
+		if len(cmps) != 2 {
+			return nil, fmt.Errorf("del command requires an argument")
+		}
+		cmd.key = cmps[1]
+	case "quit":
+		cmd.op = commandtype(quit)
+		if len(cmps) != 1 {
+			return nil, fmt.Errorf("quit command should not have any arguments")
+		}
+	default:
+		return nil, fmt.Errorf("unrecognized operation")
+	}
+
+	return cmd, nil
+}
+
+func (cmd *command) execute(c chan struct{}, s storage.Storer) (string, error) {
+	switch cmd.op {
+	case get:
+		res, err := s.Read([]byte(cmd.key))
+		if err != nil {
+			return "", err
+		}
+		return string(res), nil
+	case set:
+		err := s.Write([]byte(cmd.key), []byte(cmd.val))
+		if err != nil {
+			return "", err
+		}
+		return "", nil
+	case del:
+		err := s.Delete([]byte(cmd.key))
+		if err != nil {
+			return "", err
+		}
+		return "", nil
+	case quit:
+		close(c)
+		return "", fmt.Errorf("closing")
+	default:
+		return "", fmt.Errorf("did not execute")
 	}
 }
