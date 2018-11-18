@@ -1,3 +1,6 @@
+kvhi:
+	-go run cmd/kvhi/main.go
+
 protoc:
 	protoc --go_out=. ./storage/hash/pb/*.proto
 
