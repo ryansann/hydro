@@ -2,7 +2,7 @@ kvhi:
 	-go run cmd/kvhi/main.go
 
 protoc:
-	protoc --go_out=. ./storage/hash/pb/*.proto
+	protoc --go_out=. ./pb/*.proto
 
 test:
 	go test -race ./...
