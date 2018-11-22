@@ -57,12 +57,12 @@ func NewStore(opts ...OptionFunc) (*Store, error) {
 
 	filename, err := filepath.Abs(cfg.file)
 	if err != nil {
-		return nil, fmt.Errorf("could not get absolute path for dir: %s %v", cfg.file, err)
+		return nil, fmt.Errorf("error: could not get absolute path for file: %s, %v", cfg.file, err)
 	}
 
 	f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		return nil, fmt.Errorf("could not create/open log file: %v", err)
+		return nil, fmt.Errorf("error: could not create/open file: %v", err)
 	}
 
 	stop := make(chan struct{})
@@ -83,12 +83,33 @@ func NewStore(opts ...OptionFunc) (*Store, error) {
 // ReadAt reads and decodes the entry at offset, in this case since we are using a single
 // file, the page number should be 0. It returns the entry and the number of bytes decoded or an error.
 func (s *Store) ReadAt(page int, offset int64) (*pb.Entry, int, error) {
-	return nil, 0, nil
+	e, n, err := pb.Decode(s.file, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return e, n, nil
 }
 
-// Write writes data to the store and returns the page, offset or an error.
-func (s *Store) Write(data []byte) (int, int64, error) {
-	return 0, 0, nil
+// Write writes data to the store and returns the page and staring offset or an error.
+func (s *Store) Write(e *pb.Entry) (int, int64, error) {
+	// encode our entry and its size into bytes
+	bytes, err := pb.Encode(e)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	// write the encoded entry to the file
+	n, err := s.file.Write(bytes)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	start := s.curoffset
+
+	s.curoffset += int64(n)
+
+	return 0, start, nil
 }
 
 // Close stops the sync loop and closes the file resource. It blocks until this completes.

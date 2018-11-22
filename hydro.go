@@ -19,7 +19,7 @@ type Store interface {
 	ReadAt(page int, offset int64) (*pb.Entry, int, error)
 	// Write writes data to the underlying storage, returning the page and offset where the data starts.
 	// If it can't perform the write operation it returns an error.
-	Write(data []byte) (int, int64, error)
+	Write(e *pb.Entry) (int, int64, error)
 	// Close is to cleanup any storage resources
 	io.Closer
 }
