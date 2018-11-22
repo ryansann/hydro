@@ -6,16 +6,6 @@ import (
 	"github.com/ryansann/hydro/pb"
 )
 
-// OffsetReader defines a behavior needed for decoding, i.e. reading bytes starting at a particular offset.
-// For example, files implement this interface via their ReadAt method.
-type OffsetReader interface {
-	// ReadAt reads from a source starting from offset into dest.
-	// To restrict the number of bytes read into dest, make dest a certain length.
-	// It returns the number of bytes read or an error. If an error is returned,
-	// you cannot rely on the data read (or not read) into dest.
-	ReadAt(dest []byte, offset int64) (int, error)
-}
-
 // Store is the interface that a storage engine implements.
 // A storage engine can be as simple as a single file, or more complex,
 // like a series of segmented files with background compaction.

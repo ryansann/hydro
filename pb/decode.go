@@ -7,7 +7,7 @@ import (
 	"github.com/golang/protobuf/proto"
 )
 
-// OffsetReader defines a behavior needed for decoding, that is reading at a specific offset
+// OffsetReader defines a behavior needed for decoding, i.e. reading bytes starting at a particular offset.
 // For example, files implement this interface via their ReadAt method.
 type OffsetReader interface {
 	// ReadAt reads from a source starting from offset into dest.
