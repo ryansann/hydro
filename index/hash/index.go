@@ -1,3 +1,15 @@
+// Package hash implements a simple storage agnostic hash index for a key value store.
+//
+// - no segmentation / compaction - implies that keys can and will appear multiple times, the most recent entry will reflect the actual state in the keys
+// - uses single append only log (can grow boundlessly with no segmentation / compaction)
+// - keeps entire keyset in an in-memory map (keys)
+// - keys maps a keys hash to its corresponding log entry's location in the underlying paginated storage
+//
+// Operations:
+// - get
+// - set
+// - del
+// - restore -> restore the keys map from the commit log
 package hash
 
 import (
@@ -11,27 +23,6 @@ import (
 	"github.com/ryansann/hydro/pb"
 	"github.com/ryansann/hydro/storage"
 )
-
-// Hash Index with no segmentation / compaction
-// - uses single append only log (can grow boundlessly with no segmentation / compaction)
-// - keeps entire keyset in an in-memory map (Index.keys)
-// - keys maps a keys hash to its corresponding log entry's offset in the storage file
-// - starts a background process to ensure log file is synced to disk every sync interval
-//
-// Note: in log file an entry is represented as -> <size><data>
-// where size is a uint32 encoded in little endian to 4 bytes, storing the length in bytes of data,
-// and data is a pb.LogEntry marshaled to bytes
-// A log file looks like: <size><data><size><data>...<size><data><size><data>
-// No compaction implies that keys can and will appear multiple times, the most recent entry will reflect the actual state in the keys
-//
-// Operations:
-// - read -> lookup key in keys, find it's offset, read data size at offset, read data from offset+4, get value from data
-// - write -> create a log entry pb object, marshal it to bytes (wire format), get its size in bytes,
-// store its size and data bytes in log file as an entry, update or insert key/offset into keys
-// - delete -> write a delete log entry (for restore purposes), remove key from keys
-// - restore -> start from beginning of storage file, read all log entries, continuously updating keys, by the end the keys will
-// reflect the state the index was in when it was closed or it crashed (assuming no data was corrupted during crash)
-// - close -> closes the storage log file
 
 // KeyHashFunc is a hash func that takes a slice of bytes and returns a hash or an error
 type KeyHashFunc func(key []byte) (string, error)
@@ -111,8 +102,6 @@ func NewIndex(store storage.Storer, opts ...IndexOption) (*Index, error) {
 		restore: true,
 	}
 
-	canrestore := false
-
 	for _, opt := range opts {
 		opt(cfg)
 	}
@@ -128,7 +117,7 @@ func NewIndex(store storage.Storer, opts ...IndexOption) (*Index, error) {
 		done: done,
 	}
 
-	if cfg.restore && canrestore {
+	if cfg.restore {
 		err := i.Restore()
 		if err != nil {
 			return nil, err
@@ -227,8 +216,6 @@ func (i *Index) Del(key string) error {
 	}
 
 	// remove key from map
-	i.mtx.Lock()
-	defer i.mtx.Unlock()
 	delete(i.keys, hash)
 
 	return nil
@@ -260,13 +247,9 @@ func (i *Index) Restore() error {
 		// add the key if we encounter a write entry, delete it if we encounter a delete entry.
 		switch e.GetType() {
 		case pb.EntryType_WRITE:
-			i.mtx.Lock()
 			i.keys[e.GetKey()] = entryLocation{page, offset}
-			i.mtx.Unlock()
 		case pb.EntryType_DELETE:
-			i.mtx.Lock()
 			delete(i.keys, e.GetKey())
-			i.mtx.Unlock()
 		}
 
 		page, offset = nextPage, nextOffset

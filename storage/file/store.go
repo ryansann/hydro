@@ -1,3 +1,8 @@
+// Package file implements a simple file storage layer for an index to operate on.
+// The Store object implements the store.Storer interface, which is used by higher level index constructs.
+// Note: in log file an entry is represented as -> <size><data>
+// where size is a uint32 encoded in little endian to 4 bytes, storing the length in bytes of data, and data is a pb.Entry marshaled to bytes
+// A log file looks like: <size><data><size><data>...<size><data><size><data>
 package file
 
 import (
@@ -98,8 +103,9 @@ func (s *Store) Sync() error {
 	return s.file.Sync()
 }
 
-// cleanup is a utility for testing that closes and removes the file.
-func (s *Store) cleanup() error {
+// Cleanup is a utility for testing that closes and removes the file.
+// NOTE: This should be unexported in the future.
+func (s *Store) Cleanup() error {
 	err := s.Close()
 	if err != nil {
 		return err

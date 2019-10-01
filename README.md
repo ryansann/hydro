@@ -10,7 +10,7 @@ You can connect to the server via `telnet localhost <port>`. Once connected you 
 
 - `set hello world` // sets key "hello" to "world"
 - `get hello` // gets value for key "hello"
-- `del hello` // deletes key hello
+- `del hello` // deletes key "hello"
 - `quit` // close connection
 
 If you have restore enabled, the database will read the commit log to reload the key value store on startup.
@@ -28,7 +28,7 @@ export HYDRO_SERVER_SHUTDOWN_TIMEOUT=5s
 ## Future Work
 
 - Implement Log Compaction
-- Implement different indexing strategies, e.g. SSTable
+- Implement different indexing strategies, e.g. SSTable, LSM
 - Implement different storage layers, e.g. paginated file storage
 - Support clustering and replication across nodes
 - Multiple indexes
