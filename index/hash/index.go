@@ -49,7 +49,7 @@ func DefaultHash(key []byte) (string, error) {
 	return str, nil
 }
 
-// NoHash is a HashFunc that returns the key as a string without hashing
+// NoHash is a HashFunc that returns the key as a string without hashing.
 func NoHash(key []byte) (string, error) {
 	return string(key), nil
 }
@@ -60,27 +60,27 @@ type options struct {
 	restore bool
 }
 
-// IndexOption is func that modifies the server's configuration options
+// IndexOption is func that modifies the server's configuration options.
 type IndexOption func(*options)
 
-// SyncInterval overrides the Index default sync interval
+// SyncInterval overrides the Index default sync interval.
 func SyncInterval(dur time.Duration) IndexOption {
 	return func(opts *options) {
 		opts.sync = dur
 	}
 }
 
-// SetHashFunc overrides the Index default hashing func
+// SetHashFunc overrides the Index default hashing func.
 func SetHashFunc(hash KeyHashFunc) IndexOption {
 	return func(opts *options) {
 		opts.hash = hash
 	}
 }
 
-// NoRestore tells the Index not to restore the keys from the storage log if it exists already
-func NoRestore() IndexOption {
+// Restore tells the Index whether or not to restore the keys from the storage log if it exists already.
+func Restore(v bool) IndexOption {
 	return func(opts *options) {
-		opts.restore = false
+		opts.restore = v
 	}
 }
 

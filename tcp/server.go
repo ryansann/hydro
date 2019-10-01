@@ -113,7 +113,7 @@ func (s *Server) Serve() {
 		close(s.exited)
 	}()
 
-	s.log.Println("accepting connections")
+	s.log.Printf("accepting connections on port %s\n", s.port)
 
 	ln, err := net.Listen("tcp", s.port)
 	if err != nil {
