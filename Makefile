@@ -1,5 +1,5 @@
-kvhi:
-	-go run cmd/kvhi/main.go
+run:
+	go run cmd/hydro/main.go
 
 protoc:
 	protoc --go_out=. ./pb/*.proto

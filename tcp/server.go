@@ -11,37 +11,28 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ryansann/hydro/storage"
-	"github.com/ryansann/hydro/storage/hash"
+	"github.com/ryansann/hydro/index"
 )
 
-// OptionFunc overrides a default option
-type OptionFunc func(*options)
+// ServerOption overrides a default option
+type ServerOption func(*options)
 
 type options struct {
 	port            string
 	log             *log.Logger
-	store           storage.Storer
-	readtimeout     time.Duration
-	shutdowntimeout time.Duration
+	readTimeout     time.Duration
+	shutdownTimeout time.Duration
 }
 
 // Port overrides the default port ":8080"
-func Port(p string) OptionFunc {
+func Port(p string) ServerOption {
 	return func(opts *options) {
 		opts.port = p
 	}
 }
 
-// Store overrides the server's default storage engine to the passed in value
-func Store(s storage.Storer) OptionFunc {
-	return func(opts *options) {
-		opts.store = s
-	}
-}
-
 // Logger overrides default logger to the one passed in
-func Logger(l *log.Logger) OptionFunc {
+func Logger(l *log.Logger) ServerOption {
 	return func(opts *options) {
 		opts.log = l
 	}
@@ -49,9 +40,9 @@ func Logger(l *log.Logger) OptionFunc {
 
 // ReadTimeout overrides the default read timeout to the duration passed in
 // If overriding ShutdownTimeout as well, ReadTimeout should be greater than ShutdownTimeout
-func ReadTimeout(t time.Duration) OptionFunc {
+func ReadTimeout(t time.Duration) ServerOption {
 	return func(opts *options) {
-		opts.readtimeout = t
+		opts.readTimeout = t
 	}
 }
 
@@ -59,9 +50,9 @@ func ReadTimeout(t time.Duration) OptionFunc {
 // to finish being handled before forcefully shutting down (Server.Serve exits).
 // If ReadTimeout > ShutdownTimeout there may be cases where connections don't get enough time to close
 // before Server.Serve exits.
-func ShutdownTimeout(t time.Duration) OptionFunc {
+func ShutdownTimeout(t time.Duration) ServerOption {
 	return func(opts *options) {
-		opts.shutdowntimeout = t
+		opts.shutdownTimeout = t
 	}
 }
 
@@ -71,28 +62,27 @@ type Server struct {
 	mtx             sync.Mutex
 	port            string
 	log             *log.Logger
-	store           storage.Storer
+	index           index.Indexer
 	ln              net.Listener
 	handlers        sync.WaitGroup
-	readtimeout     time.Duration
-	shutdowntimeout time.Duration
+	readTimeout     time.Duration
+	shutdownTimeout time.Duration
 	close           chan struct{}
 	exited          chan struct{}
 }
 
-// NewServer returns a configured Server instance ready to start serving
-func NewServer(opts ...OptionFunc) (*Server, error) {
-	store, err := hash.NewIndex()
-	if err != nil {
-		return nil, err
-	}
+const (
+	defaultReadTimeout     = 60 * time.Second
+	defaultShutdownTimeout = 5 * time.Second
+)
 
+// NewServer returns a configured Server instance ready to start serving
+func NewServer(index index.Indexer, opts ...ServerOption) (*Server, error) {
 	cfg := &options{
 		port:            ":8080",
 		log:             log.New(os.Stdout, "", log.LstdFlags|log.Lshortfile),
-		store:           store,
-		readtimeout:     time.Second * 15,
-		shutdowntimeout: time.Second * 20,
+		readTimeout:     defaultReadTimeout,
+		shutdownTimeout: defaultShutdownTimeout,
 	}
 
 	for _, opt := range opts {
@@ -103,10 +93,10 @@ func NewServer(opts ...OptionFunc) (*Server, error) {
 		mtx:             sync.Mutex{},
 		port:            cfg.port,
 		log:             cfg.log,
-		store:           cfg.store,
+		index:           index,
 		handlers:        sync.WaitGroup{},
-		readtimeout:     cfg.readtimeout,
-		shutdowntimeout: cfg.shutdowntimeout,
+		readTimeout:     cfg.readTimeout,
+		shutdownTimeout: cfg.shutdownTimeout,
 		close:           make(chan struct{}),
 		exited:          make(chan struct{}),
 	}, nil
@@ -150,11 +140,6 @@ func (s *Server) Serve() {
 			case <-s.close:
 				s.log.Println("closing")
 
-				err = s.store.Close()
-				if err != nil {
-					s.log.Printf("error closing store: %v\n", err)
-				}
-
 				// close open connections
 				cancel()
 
@@ -162,8 +147,9 @@ func (s *Server) Serve() {
 			default:
 			}
 		} else {
+			s.log.Printf("accepted new connection from: %s\n", c.RemoteAddr().String())
 			s.handlers.Add(1)
-			go s.handle(ctx, newconn(c))
+			go s.handle(ctx, newConn(c))
 		}
 	}
 }
@@ -191,7 +177,7 @@ type conn struct {
 	close chan struct{}
 }
 
-func newconn(c net.Conn) *conn {
+func newConn(c net.Conn) *conn {
 	return &conn{
 		c,
 		make(chan struct{}),
@@ -211,7 +197,6 @@ func (s *Server) handle(ctx context.Context, c *conn) {
 	}()
 
 	reader := bufio.NewReaderSize(c, 4<<8)
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -221,7 +206,7 @@ func (s *Server) handle(ctx context.Context, c *conn) {
 			c.Write([]byte("QUITTING\n"))
 			return
 		default:
-			c.SetReadDeadline(time.Now().Add(s.readtimeout))
+			c.SetReadDeadline(time.Now().Add(s.readTimeout))
 
 			l, _, err := reader.ReadLine()
 			if err != nil {
@@ -231,16 +216,16 @@ func (s *Server) handle(ctx context.Context, c *conn) {
 				return
 			}
 
-			cmd, err := parsecommand(string(l))
+			cmd, err := parseCommand(string(l))
 			if err != nil {
 				s.log.Println("failed to parse command")
 				c.Write([]byte(fmt.Sprintf("PARSE FAILED: %v\n", err)))
 				continue
 			}
 
-			res, err := cmd.execute(c.close, s.store)
+			res, err := cmd.execute(c.close, s.index)
 			if err != nil {
-				s.log.Printf("failed to execute command: %s %s %s\n", commandtypes[cmd.op], cmd.key, cmd.val)
+				s.log.Printf("failed to execute command: %s %s %s\n", commands[cmd.op], cmd.key, cmd.val)
 				c.Write([]byte(fmt.Sprintf("EXECUTE FAILED: %v\n", err)))
 				continue
 			}
@@ -254,7 +239,7 @@ func (s *Server) handle(ctx context.Context, c *conn) {
 	}
 }
 
-// wait waits for wg waiting finishes normally it returns true, otherwise it returns false.
+// wait waits for wg. If waiting finishes before timeout, it returns true, otherwise it returns false.
 func (s *Server) wait() bool {
 	c := make(chan struct{})
 	go func() {
@@ -264,97 +249,7 @@ func (s *Server) wait() bool {
 	select {
 	case <-c:
 		return true // completed normally
-	case <-time.After(s.shutdowntimeout):
+	case <-time.After(s.shutdownTimeout):
 		return false // timed out
-	}
-}
-
-type commandtype int
-
-const (
-	get = iota
-	set
-	del
-	quit
-)
-
-var commandtypes = map[commandtype]string{
-	get:  "get",
-	set:  "set",
-	del:  "del",
-	quit: "quit",
-}
-
-type command struct {
-	op  commandtype
-	key string
-	val string
-}
-
-func parsecommand(l string) (*command, error) {
-	cmps := strings.Split(l, " ")
-	if len(cmps) < 1 {
-		return nil, fmt.Errorf("command must have an operation")
-	}
-
-	cmd := &command{}
-
-	switch strings.ToLower(cmps[0]) {
-	case "get":
-		cmd.op = commandtype(get)
-		if len(cmps) != 2 {
-			return nil, fmt.Errorf("get command requires an argument")
-		}
-		cmd.key = cmps[1]
-	case "set":
-		cmd.op = commandtype(set)
-		if len(cmps) != 3 {
-			return nil, fmt.Errorf("set command requires 2 arguments")
-		}
-		cmd.key = cmps[1]
-		cmd.val = cmps[2]
-	case "del":
-		cmd.op = commandtype(del)
-		if len(cmps) != 2 {
-			return nil, fmt.Errorf("del command requires an argument")
-		}
-		cmd.key = cmps[1]
-	case "quit":
-		cmd.op = commandtype(quit)
-		if len(cmps) != 1 {
-			return nil, fmt.Errorf("quit command should not have any arguments")
-		}
-	default:
-		return nil, fmt.Errorf("unrecognized operation")
-	}
-
-	return cmd, nil
-}
-
-func (cmd *command) execute(c chan struct{}, s storage.Storer) (string, error) {
-	switch cmd.op {
-	case get:
-		res, err := s.Read([]byte(cmd.key))
-		if err != nil {
-			return "", err
-		}
-		return string(res), nil
-	case set:
-		err := s.Write([]byte(cmd.key), []byte(cmd.val))
-		if err != nil {
-			return "", err
-		}
-		return "", nil
-	case del:
-		err := s.Delete([]byte(cmd.key))
-		if err != nil {
-			return "", err
-		}
-		return "", nil
-	case quit:
-		close(c)
-		return "", fmt.Errorf("closing")
-	default:
-		return "", fmt.Errorf("did not execute")
 	}
 }

@@ -3,9 +3,9 @@ package pb
 import (
 	"bytes"
 	"encoding/binary"
-	fmt "fmt"
+	"fmt"
 
-	proto "github.com/golang/protobuf/proto"
+	"github.com/golang/protobuf/proto"
 )
 
 // Encode accepts an Entry and encodes it into a binary representation
