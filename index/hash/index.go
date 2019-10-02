@@ -76,8 +76,8 @@ func Restore(v bool) IndexOption {
 }
 
 type entryLocation struct {
-	page   int
-	offset int64
+	segment int
+	offset  int64
 }
 
 // Index is a hash index implementation
@@ -148,13 +148,13 @@ func (i *Index) Set(key string, val string) error {
 	defer i.mtx.Unlock()
 
 	// append entry to storage log
-	pg, off, err := i.log.Append(entry)
+	seg, off, err := i.log.Append(entry)
 	if err != nil {
 		return err
 	}
 
 	// store the offset where we started writing
-	i.keys[hash] = entryLocation{page: pg, offset: off}
+	i.keys[hash] = entryLocation{segment: seg, offset: off}
 
 	return nil
 }
@@ -176,7 +176,7 @@ func (i *Index) Get(key string) (string, error) {
 		return "", fmt.Errorf("did not find key: %s in index", string(key))
 	}
 
-	e, err := i.log.ReadAt(loc.page, loc.offset)
+	e, err := i.log.ReadAt(loc.segment, loc.offset)
 	if err != nil {
 		return "", err
 	}
@@ -226,14 +226,14 @@ func (i *Index) Restore() error {
 	i.mtx.Lock()
 	defer i.mtx.Unlock()
 
-	var page int
+	var segment int
 	var offset int64
 	var readerr error
 	done := false
 
 	for {
 		// read entries from file until we encounter an eof or an unexpected error
-		e, nextPage, nextOffset, err := i.log.Scan(page, offset)
+		e, nextsegment, nextOffset, err := i.log.Scan(segment, offset)
 		if err != nil {
 			if err == io.EOF {
 				done = true
@@ -247,12 +247,12 @@ func (i *Index) Restore() error {
 		// add the key if we encounter a write entry, delete it if we encounter a delete entry.
 		switch e.GetType() {
 		case pb.EntryType_WRITE:
-			i.keys[e.GetKey()] = entryLocation{page, offset}
+			i.keys[e.GetKey()] = entryLocation{segment, offset}
 		case pb.EntryType_DELETE:
 			delete(i.keys, e.GetKey())
 		}
 
-		page, offset = nextPage, nextOffset
+		segment, offset = nextsegment, nextOffset
 	}
 
 	// if we encountered an unexpected error, return it

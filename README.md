@@ -1,6 +1,6 @@
-# Hydro Persistent Key Value Store
+# Hydro
 
-Hydro is a simple, persistent key value store with abstracted storage and indexing layers.
+Hydro is a simple, persistent key / value store written in Go.
 
 This was done as an experiment in databases for a Golang meetup.
 
