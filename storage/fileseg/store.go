@@ -120,10 +120,6 @@ func (s *Store) initSegments() error {
 	// if there are existing segments we need to initialize data structures
 	segments := make([]segment, len(files))
 	for _, file := range files {
-		if file.IsDir() {
-			continue
-		}
-
 		fpath := strings.Join([]string{s.dirPath, file.Name()}, "/")
 
 		f, err := os.OpenFile(fpath, os.O_APPEND|os.O_RDWR, 0644)
@@ -179,7 +175,8 @@ func (s *Store) Scan(segment int, offset int64) (*pb.Entry, int, int64, error) {
 func (s *Store) Append(e *pb.Entry) (int, int64, error) {
 	idx, offset, err := s.segments[len(s.segments)-1].append(e)
 	if err != nil && err == errSegmentFull {
-		seg, err := newSegment(s.dirPath, len(s.segments), s.segmentSize)
+		fpath := strings.Join([]string{s.dirPath, uuid.New().String()}, "/")
+		seg, err := newSegment(fpath, len(s.segments), s.segmentSize)
 		if err != nil {
 			return 0, 0, err
 		}
