@@ -188,7 +188,7 @@ func initSegment(f *os.File) (*segment, error) {
 
 	return &segment{
 		index:     int(info.GetIndex()),
-		curOffset: fi.Size() - 1,
+		curOffset: fi.Size() - 1, // TODO: is this correct?
 		mtx:       &sync.Mutex{},
 		file:      f,
 	}, nil

@@ -55,7 +55,7 @@ func NewStore(file string, opts ...StoreOption) (*Store, error) {
 
 	filename, err := filepath.Abs(file)
 	if err != nil {
-		return nil, fmt.Errorf("error: could not get absolute path for file: %s, %v", file, err)
+		return nil, errors.Wrapf(err, "could not get absolute path for file: %s", file)
 	}
 
 	f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)

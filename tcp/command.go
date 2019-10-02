@@ -1,7 +1,7 @@
 package tcp
 
 import (
-	"fmt"
+	"errors"
 	"strings"
 
 	"github.com/ryansann/hydro/index"
@@ -33,7 +33,7 @@ type command struct {
 func parseCommand(line string) (*command, error) {
 	cmps := strings.Split(line, " ")
 	if len(cmps) < 1 {
-		return nil, fmt.Errorf("command must have an operation")
+		return nil, errors.New("command must have an operation")
 	}
 
 	cmd := &command{}
@@ -41,34 +41,35 @@ func parseCommand(line string) (*command, error) {
 	case commands[get]:
 		cmd.op = commandType(get)
 		if len(cmps) != 2 {
-			return nil, fmt.Errorf("get command requires an argument")
+			return nil, errors.New("get command requires an argument")
 		}
 		cmd.key = cmps[1]
 	case commands[set]:
 		cmd.op = commandType(set)
 		if len(cmps) != 3 {
-			return nil, fmt.Errorf("set command requires 2 arguments")
+			return nil, errors.New("set command requires 2 arguments")
 		}
 		cmd.key = cmps[1]
 		cmd.val = cmps[2]
 	case commands[del]:
 		cmd.op = commandType(del)
 		if len(cmps) != 2 {
-			return nil, fmt.Errorf("del command requires an argument")
+			return nil, errors.New("del command requires an argument")
 		}
 		cmd.key = cmps[1]
 	case commands[quit]:
 		cmd.op = commandType(quit)
 		if len(cmps) != 1 {
-			return nil, fmt.Errorf("quit command should not have any arguments")
+			return nil, errors.New("quit command should not have any arguments")
 		}
 	default:
-		return nil, fmt.Errorf("unrecognized operation")
+		return nil, errors.New("unrecognized operation")
 	}
 
 	return cmd, nil
 }
 
+// execute runs the command by communicating directly with the Indexer.
 func (cmd *command) execute(c chan struct{}, i index.Indexer) (string, error) {
 	switch cmd.op {
 	case get:
@@ -91,8 +92,8 @@ func (cmd *command) execute(c chan struct{}, i index.Indexer) (string, error) {
 		return "", nil
 	case quit:
 		close(c)
-		return "", fmt.Errorf("closing")
+		return "", errors.New("closing")
 	default:
-		return "", fmt.Errorf("did not execute")
+		return "", errors.New("did not execute")
 	}
 }
