@@ -2,11 +2,12 @@
 package fileseg
 
 import (
+	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,7 +20,7 @@ type StoreOption func(*options)
 
 type options struct {
 	sync        time.Duration
-	segmentSize int64
+	segmentSize int
 	compaction  bool
 }
 
@@ -31,7 +32,7 @@ func SyncInterval(dur time.Duration) StoreOption {
 }
 
 // SegmentSize sets the max size for a given storage segment.
-func SegmentSize(n int64) StoreOption {
+func SegmentSize(n int) StoreOption {
 	return func(opts *options) {
 		opts.segmentSize = n
 	}
@@ -44,21 +45,12 @@ func Compaction(enabled bool) StoreOption {
 	}
 }
 
-// segment represents an individual storage segment that stores bytes in a file.
-type segment struct {
-	index     int
-	curOffset int64
-	// mtx guards file
-	mtx  *sync.Mutex
-	file *os.File
-}
-
 // Store provides operations for persisting to a data directory where storage segments are written as files.
 // It implements the storage.Storer interface.
 type Store struct {
-	segmentSize int64
-	cur         *segment
-	prev        []segment
+	dirPath     string
+	segmentSize int
+	segments    []segment
 }
 
 // NewStore returns a new Store object or an error.
@@ -92,10 +84,11 @@ func NewStore(dir string, opts ...StoreOption) (*Store, error) {
 	}
 
 	s := &Store{
+		dirPath:     path,
 		segmentSize: cfg.segmentSize,
 	}
 
-	err = s.initSegments(path)
+	err = s.initSegments()
 	if err != nil {
 		return nil, errors.Wrap(err, "could not initialize storage segments")
 	}
@@ -106,20 +99,20 @@ func NewStore(dir string, opts ...StoreOption) (*Store, error) {
 // initSegments initializes the storage segments from directory at path.
 // If there are no files in the directory, it creates the initial segment.
 // It returns an error if there was one.
-func (s *Store) initSegments(path string) error {
-	files, err := ioutil.ReadDir(path)
+func (s *Store) initSegments() error {
+	files, err := ioutil.ReadDir(s.dirPath)
 	if err != nil {
 		return err
 	}
 
 	// if there are no existing segments, create the first and return
 	if len(files) == 0 {
-		seg, err := newSegment(strings.Join([]string{path, uuid.New().String()}, "/"), 0)
+		seg, err := newSegment(strings.Join([]string{s.dirPath, uuid.New().String()}, "/"), 0, s.segmentSize)
 		if err != nil {
 			return err
 		}
 
-		s.cur = seg
+		s.segments = append(s.segments, *seg)
 
 		return nil
 	}
@@ -127,7 +120,11 @@ func (s *Store) initSegments(path string) error {
 	// if there are existing segments we need to initialize data structures
 	segments := make([]segment, len(files))
 	for _, file := range files {
-		fpath := strings.Join([]string{path, file.Name()}, "/")
+		if file.IsDir() {
+			continue
+		}
+
+		fpath := strings.Join([]string{s.dirPath, file.Name()}, "/")
 
 		f, err := os.OpenFile(fpath, os.O_APPEND|os.O_RDWR, 0644)
 		if err != nil {
@@ -142,74 +139,66 @@ func (s *Store) initSegments(path string) error {
 		segments[seg.index] = *seg
 	}
 
-	s.prev = segments[:len(segments)-1]
-	s.cur = &segments[len(segments)-1]
+	s.segments = segments
 
 	return nil
 }
 
-// newSegment creates a new file with name, writes the segment info and returns the segment or an error.
-func newSegment(path string, index int) (*segment, error) {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
-	if err != nil {
-		return nil, errors.Wrap(err, "could not create/open file")
-	}
-
-	ibytes, err := pb.EncodeInfo(&pb.SegmentInfo{Index: int64(index)})
-	if err != nil {
-		return nil, err
-	}
-
-	n, err := f.Write(ibytes)
-	if err != nil {
-		return nil, errors.Wrapf(err, "could not write segment info to file: %s", path)
-	}
-
-	return &segment{
-		index:     index,
-		curOffset: int64(n),
-		mtx:       &sync.Mutex{},
-		file:      f,
-	}, nil
-}
-
-// initSegment reads an existing file and creates its corresponding segment object.
-// It returns an error if it cannot create the segment.
-func initSegment(f *os.File) (*segment, error) {
-	info, _, err := pb.DecodeInfo(f, 0)
-	if err != nil {
-		return nil, err
-	}
-
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, errors.Wrap(err, "could not get file info")
-	}
-
-	return &segment{
-		index:     int(info.GetIndex()),
-		curOffset: fi.Size() - 1, // TODO: is this correct?
-		mtx:       &sync.Mutex{},
-		file:      f,
-	}, nil
-}
-
-// ReadAt ...
+// ReadAt reads the entry from segment starting at offset, returning an error if there was one.
 func (s *Store) ReadAt(segment int, offset int64) (*pb.Entry, error) {
-	return nil, nil
+	if segment > len(s.segments) {
+		return nil, fmt.Errorf("segment %v does not exist", segment)
+	}
+
+	return s.segments[segment].readAt(offset)
 }
 
-// Scan ...
+// Scan decodes and returns the entry at segment, offset along with the next segment and next offset to scan from.
+// If it is unsuccessful in decoding the entry it returns an error.
 func (s *Store) Scan(segment int, offset int64) (*pb.Entry, int, int64, error) {
-	return nil, 0, 0, nil
+	if segment > len(s.segments)-1 {
+		return nil, 0, 0, fmt.Errorf("segment %v does not exist", segment)
+	}
+
+	e, nextSeg, nextOff, err := s.segments[segment].scan(offset)
+	if err != nil && err == io.EOF {
+		nextSeg++
+		if nextSeg > len(s.segments)-1 {
+			return nil, 0, 0, io.EOF
+		}
+
+		nextOff = s.segments[nextSeg].startOffset
+	} else if err != nil {
+		return nil, 0, 0, err
+	}
+
+	return e, nextSeg, nextOff, nil
 }
 
-// Append ...
+// Append appends data a segment and returns the segment and staring offset, otherwise it returns an error.
 func (s *Store) Append(e *pb.Entry) (int, int64, error) {
-	return 0, 0, nil
+	idx, offset, err := s.segments[len(s.segments)-1].append(e)
+	if err != nil && err == errSegmentFull {
+		seg, err := newSegment(s.dirPath, len(s.segments), s.segmentSize)
+		if err != nil {
+			return 0, 0, err
+		}
+
+		s.segments = append(s.segments, *seg)
+
+		return seg.append(e)
+	} else if err != nil {
+		return 0, 0, err
+	}
+
+	return idx, offset, nil
 }
 
-// Close ...
+// Close closes all underlying segment files and stops background processes.
 func (s *Store) Close() error {
+	for _, seg := range s.segments {
+		_ = seg.file.Close()
+	}
+
 	return nil
 }

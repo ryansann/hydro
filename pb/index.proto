@@ -15,4 +15,5 @@ message Entry {
 
 message SegmentInfo {
 	int64 index = 1;
+	int64 capacity = 2;
 }

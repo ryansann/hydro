@@ -19,8 +19,6 @@ The are hydro specific environment variables that will change runtime behavior. 
 
 ## Future Work
 
-- Implement segmented file storage with compaction
-- Implement different indexing strategies, e.g. SSTable, LSM
-- Implement different storage layers, e.g. paginated file storage
+- Implement additional indexing / storage modes, e.g. SSTable, LSM
 - Support clustering and replication across nodes
 - Multiple indexes

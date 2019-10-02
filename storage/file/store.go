@@ -35,7 +35,7 @@ func SyncInterval(dur time.Duration) StoreOption {
 type Store struct {
 	mtx       sync.Mutex
 	file      *os.File
-	curoffset int64
+	curOffset int64
 	sync      time.Duration
 	done      chan struct{}
 }
@@ -116,14 +116,14 @@ func (s *Store) Append(e *pb.Entry) (int, int64, error) {
 		return 0, 0, err
 	}
 
-	start := s.curoffset
+	start := s.curOffset
 
-	s.curoffset += int64(n)
+	s.curOffset += int64(n)
 
 	return 0, start, nil
 }
 
-// Close is a wrapper on the underlying file's Close method.
+// Close calls the underlying files Close method and stops the sync process.
 func (s *Store) Close() error {
 	defer func() {
 		_ = s.file.Close()
