@@ -1,5 +1,8 @@
-run:
-	go run cmd/hydro/main.go
+run: build
+	./hydrokv
+
+build:
+	go build -o hydrokv cmd/server/main.go
 
 protoc:
 	protoc --go_out=. ./pb/*.proto

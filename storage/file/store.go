@@ -10,9 +10,24 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/ryansann/hydro/pb"
 )
+
+// StoreOption is func that modifies the store's configuration options.
+type StoreOption func(*options)
+
+type options struct {
+	sync time.Duration
+}
+
+// SyncInterval overrides the Index default sync interval.
+func SyncInterval(dur time.Duration) StoreOption {
+	return func(opts *options) {
+		opts.sync = dur
+	}
+}
 
 // Store provides operations for persisting to a file and reading data back.
 // It implements the storage.Storer interface.
@@ -20,12 +35,23 @@ type Store struct {
 	mtx       sync.Mutex
 	file      *os.File
 	curoffset int64
+	sync      time.Duration
+	done      chan struct{}
 }
 
 // NewStore returns a new Store object. It accepts OptionFuncs for overriding
 // default values for the sync interval and the path of the storage file.
 // It returns a Store object or an error.
-func NewStore(file string) (*Store, error) {
+func NewStore(file string, opts ...StoreOption) (*Store, error) {
+	// default configuration
+	cfg := &options{
+		sync: time.Second * 15,
+	}
+
+	for _, opt := range opts {
+		opt(cfg)
+	}
+
 	filename, err := filepath.Abs(file)
 	if err != nil {
 		return nil, fmt.Errorf("error: could not get absolute path for file: %s, %v", file, err)
@@ -36,9 +62,15 @@ func NewStore(file string) (*Store, error) {
 		return nil, fmt.Errorf("error: could not create/open file: %v", err)
 	}
 
-	return &Store{
+	s := &Store{
 		file: f,
-	}, nil
+		sync: cfg.sync,
+		done: make(chan struct{}),
+	}
+
+	go s.syncLoop()
+
+	return s, nil
 }
 
 // ReadAt reads and decodes the entry at segment, offset. In this case since we are using a single
@@ -92,15 +124,33 @@ func (s *Store) Append(e *pb.Entry) (int, int64, error) {
 
 // Close is a wrapper on the underlying file's Close method.
 func (s *Store) Close() error {
-	return s.file.Close()
+	defer func() {
+		_ = s.file.Close()
+		close(s.done)
+	}()
+
+	s.done <- struct{}{}
+
+	return nil
 }
 
-// Sync is a wrapper on the underlying file's Sync method.
-func (s *Store) Sync() error {
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-
-	return s.file.Sync()
+// syncLoop syncs the file contents to disk every s.sync interval,
+// it exits when it receives a signal on the s.done channel.
+func (s *Store) syncLoop() {
+	for {
+		select {
+		case <-time.After(s.sync):
+			s.mtx.Lock()
+			err := s.file.Sync()
+			s.mtx.Unlock()
+			if err != nil {
+				// TODO: change to log
+				fmt.Println(err)
+			}
+		case <-s.done:
+			return
+		}
+	}
 }
 
 // Cleanup is a utility for testing that closes and removes the file.

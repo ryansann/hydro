@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"time"
 
 	"github.com/ryansann/hydro/pb"
 	"github.com/ryansann/hydro/storage"
@@ -46,20 +45,12 @@ func NoHash(key []byte) (string, error) {
 }
 
 type options struct {
-	sync    time.Duration
 	hash    KeyHashFunc
 	restore bool
 }
 
-// IndexOption is func that modifies the server's configuration options.
+// IndexOption is func that modifies the index configuration options.
 type IndexOption func(*options)
-
-// SyncInterval overrides the Index default sync interval.
-func SyncInterval(dur time.Duration) IndexOption {
-	return func(opts *options) {
-		opts.sync = dur
-	}
-}
 
 // SetHashFunc overrides the Index default hashing func.
 func SetHashFunc(hash KeyHashFunc) IndexOption {
@@ -89,7 +80,6 @@ type Index struct {
 	keys map[string]entryLocation
 
 	hash KeyHashFunc
-	done chan struct{}
 }
 
 // NewIndex accepts a variadic number of option funcs for configuration.
@@ -97,7 +87,6 @@ type Index struct {
 func NewIndex(store storage.Storer, opts ...IndexOption) (*Index, error) {
 	// default config
 	cfg := &options{
-		sync:    time.Second * 30,
 		hash:    NoHash,
 		restore: true,
 	}
@@ -106,15 +95,10 @@ func NewIndex(store storage.Storer, opts ...IndexOption) (*Index, error) {
 		opt(cfg)
 	}
 
-	done := make(chan struct{})
-
-	go syncLoop(cfg.sync, store, done)
-
 	i := &Index{
 		log:  store,
 		keys: make(map[string]entryLocation, 0),
 		hash: cfg.hash,
-		done: done,
 	}
 
 	if cfg.restore {
@@ -261,19 +245,4 @@ func (i *Index) Restore() error {
 	}
 
 	return nil
-}
-
-// sync is intended to be run as a background go routine that flushes data to disk every interval
-func syncLoop(interval time.Duration, s storage.Storer, done <-chan struct{}) {
-	for {
-		select {
-		case <-time.After(interval):
-			err := s.Sync()
-			if err != nil {
-				fmt.Println(err)
-			}
-		case <-done:
-			return
-		}
-	}
 }

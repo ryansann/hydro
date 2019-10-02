@@ -22,8 +22,6 @@ type Storer interface {
 	// Append writes data to the tail of the underlying storage, returning the segment and offset where the data starts.
 	// If it can't perform the append operation it returns an error.
 	Append(e *pb.Entry) (int, int64, error)
-	// Sync commits the current contents of the store into stable storage, note, this could be a no op for ephemeral storage or background syncing.
-	Sync() error
 	// Close should clean up any system resources associated with the backing storer, typcially called before exit/shutdown.
 	io.Closer
 }
