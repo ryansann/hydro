@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/pkg/errors"
 	"github.com/ryansann/hydro/pb"
 )
 
@@ -39,15 +40,15 @@ type Store struct {
 	done      chan struct{}
 }
 
-// NewStore returns a new Store object. It accepts OptionFuncs for overriding
-// default values for the sync interval and the path of the storage file.
-// It returns a Store object or an error.
+// NewStore returns a new Store object or an error.
+// It accepts a file and options for overriding default behavior.
 func NewStore(file string, opts ...StoreOption) (*Store, error) {
 	// default configuration
 	cfg := &options{
 		sync: time.Second * 15,
 	}
 
+	// override defaults
 	for _, opt := range opts {
 		opt(cfg)
 	}
@@ -59,7 +60,7 @@ func NewStore(file string, opts ...StoreOption) (*Store, error) {
 
 	f, err := os.OpenFile(filename, os.O_APPEND|os.O_CREATE|os.O_RDWR, 0644)
 	if err != nil {
-		return nil, fmt.Errorf("error: could not create/open file: %v", err)
+		return nil, errors.Wrap(err, "could not create/open file")
 	}
 
 	s := &Store{

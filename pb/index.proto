@@ -12,3 +12,7 @@ message Entry {
 	string key = 2;
 	bytes value = 3;
 }
+
+message SegmentInfo {
+	int64 index = 1;
+}
