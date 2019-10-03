@@ -14,6 +14,7 @@ import (
 
 	"github.com/pkg/errors"
 	"github.com/ryansann/hydro/pb"
+	"github.com/ryansann/hydro/storage"
 )
 
 // StoreOption is func that modifies the store's configuration options.
@@ -85,16 +86,13 @@ func (s *Store) ReadAt(segment int, offset int64) (*pb.Entry, error) {
 	return e, nil
 }
 
-// Scan decodes and returns the entry at segment, offset along with the next segment and next offset to scan from.
+// IteratorAt decodes and returns the entry at segment, offset along with the next segment and next offset to scan from.
 // If it is unsuccessful in decoding the entry it returns an error.
-func (s *Store) Scan(segment int, offset int64) (*pb.Entry, int, int64, error) {
-	e, n, err := pb.Decode(s.file, offset)
-	if err != nil {
-		return nil, 0, 0, err
+func (s *Store) IteratorAt(segment int, offset int64) storage.ForwardIterator {
+	return &Iterator{
+		offset: offset,
+		s:      s,
 	}
-
-	// segment is always 0, next offset is offset + # bytes decoded
-	return e, 0, offset + n, nil
 }
 
 // Append appends data to the file and returns the segment and staring offset, otherwise it returns an error.

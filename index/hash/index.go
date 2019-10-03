@@ -210,39 +210,40 @@ func (i *Index) Restore() error {
 	i.mtx.Lock()
 	defer i.mtx.Unlock()
 
-	var segment int
-	var offset int64
-	var readerr error
+	var iterr error
 	done := false
+
+	// get an iterator pointing to the beginning of the commit log
+	it := i.log.IteratorAt(0, 0)
 
 	for {
 		// read entries from file until we encounter an eof or an unexpected error
-		e, nextsegment, nextOffset, err := i.log.Scan(segment, offset)
+		e, seg, off, err := it.Next()
 		if err != nil {
 			if err == io.EOF {
 				done = true
 				break
 			}
 
-			readerr = err
+			iterr = err
 			break
 		}
 
 		// add the key if we encounter a write entry, delete it if we encounter a delete entry.
 		switch e.GetType() {
 		case pb.EntryType_WRITE:
-			i.keys[e.GetKey()] = entryLocation{segment, offset}
+			i.keys[e.GetKey()] = entryLocation{seg, off}
 		case pb.EntryType_DELETE:
 			delete(i.keys, e.GetKey())
 		}
-
-		segment, offset = nextsegment, nextOffset
 	}
 
 	// if we encountered an unexpected error, return it
 	if !done {
-		return readerr
+		return iterr
 	}
+
+	fmt.Println(i.keys)
 
 	return nil
 }

@@ -16,12 +16,18 @@ type Storer interface {
 	// Since the storage entry should be length aware, ReadAt does not need to be given the number of bytes to read,
 	// it will get this information when it decodes the storage entry. It returns the entry and the number of bytes read, or an error if there was one.
 	ReadAt(segment int, offset int64) (*pb.Entry, error)
-	// Scan reads the entry at segment and offset and returns the entry, the next segment, and the next offset. It returns an error if it can't
-	// read the entry or there's a problem with the underlying storage. An io.EOF is returned when there is nothing left to scan.
-	Scan(segment int, offset int64) (*pb.Entry, int, int64, error)
+	// IteratorAt returns an iterator starting at segment, offset.
+	IteratorAt(segment int, offset int64) ForwardIterator
 	// Append writes data to the tail of the underlying storage, returning the segment and offset where the data starts.
 	// If it can't perform the append operation it returns an error.
 	Append(e *pb.Entry) (int, int64, error)
 	// Close should clean up any system resources associated with the backing storer, typcially called before exit/shutdown.
 	io.Closer
+}
+
+// ForwardIterator defines behavior for iterating forward over a store's entries. ForwardIterators are not safe for concurrent use.
+type ForwardIterator interface {
+	// Next returns the next entry, its segment, and its starting offset or an error if there was one.
+	// io.EOF error is returned once the end of the storage is reached or if an out of bounds segment and offset were provided as a starting point.
+	Next() (*pb.Entry, int, int64, error)
 }

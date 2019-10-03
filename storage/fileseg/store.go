@@ -3,7 +3,6 @@ package fileseg
 
 import (
 	"fmt"
-	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -13,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"github.com/ryansann/hydro/pb"
+	"github.com/ryansann/hydro/storage"
 )
 
 // StoreOption is func that modifies the store's configuration options.
@@ -146,29 +146,17 @@ func (s *Store) ReadAt(segment int, offset int64) (*pb.Entry, error) {
 		return nil, fmt.Errorf("segment %v does not exist", segment)
 	}
 
-	return s.segments[segment].readAt(offset)
+	e, _, err := s.segments[segment].readAt(offset)
+	return e, err
 }
 
-// Scan decodes and returns the entry at segment, offset along with the next segment and next offset to scan from.
-// If it is unsuccessful in decoding the entry it returns an error.
-func (s *Store) Scan(segment int, offset int64) (*pb.Entry, int, int64, error) {
-	if segment > len(s.segments)-1 {
-		return nil, 0, 0, fmt.Errorf("segment %v does not exist", segment)
+// IteratorAt returns an iterator starting at segment, offset or an error if there was one.
+func (s *Store) IteratorAt(segment int, offset int64) storage.ForwardIterator {
+	return &Iterator{
+		segment: segment,
+		offset:  offset,
+		s:       s,
 	}
-
-	e, nextSeg, nextOff, err := s.segments[segment].scan(offset)
-	if err != nil && err == io.EOF {
-		nextSeg++
-		if nextSeg > len(s.segments)-1 {
-			return nil, 0, 0, io.EOF
-		}
-
-		nextOff = s.segments[nextSeg].startOffset
-	} else if err != nil {
-		return nil, 0, 0, err
-	}
-
-	return e, nextSeg, nextOff, nil
 }
 
 // Append appends data a segment and returns the segment and staring offset, otherwise it returns an error.

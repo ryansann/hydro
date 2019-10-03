@@ -226,7 +226,7 @@ func (s *Server) handle(ctx context.Context, c *conn) {
 			res, err := cmd.execute(c.close, s.index)
 			if err != nil {
 				s.log.Printf("failed to execute command: %s %s %s\n", commands[cmd.op], cmd.key, cmd.val)
-				c.Write([]byte(fmt.Sprintf("EXECUTE FAILED: %v\n", err)))
+				c.Write([]byte(fmt.Sprintf("EXECUTION FAILED: %v\n", err)))
 				continue
 			}
 

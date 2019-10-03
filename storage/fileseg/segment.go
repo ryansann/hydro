@@ -13,7 +13,7 @@ type segment struct {
 	index       int
 	capacity    int   // capacity is the number of bytes a segment can hold, a given segment will not exceed capacity.
 	startOffset int64 // startOffset is the offset where entry records start, e.g. after segment info
-	curOffset   int64
+	lastOffset  int64
 	// mtx guards file
 	mtx  *sync.Mutex
 	file *os.File
@@ -26,7 +26,9 @@ func newSegment(path string, index int, capacity int) (*segment, error) {
 		return nil, errors.Wrap(err, "could not create/open file")
 	}
 
-	ibytes, err := pb.EncodeInfo(&pb.SegmentInfo{Index: int64(index), Capacity: int64(capacity)})
+	info := &pb.SegmentInfo{Index: int64(index), Capacity: int64(capacity)}
+
+	ibytes, err := pb.EncodeInfo(info)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +42,7 @@ func newSegment(path string, index int, capacity int) (*segment, error) {
 		index:       index,
 		capacity:    capacity,
 		startOffset: int64(n),
-		curOffset:   int64(n),
+		lastOffset:  int64(n),
 		mtx:         &sync.Mutex{},
 		file:        f,
 	}, nil
@@ -49,7 +51,7 @@ func newSegment(path string, index int, capacity int) (*segment, error) {
 // initSegment reads an existing file and creates its corresponding segment object.
 // It returns an error if it cannot create the segment.
 func initSegment(f *os.File) (*segment, error) {
-	info, _, err := pb.DecodeInfo(f, 0)
+	info, n, err := pb.DecodeInfo(f, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -60,35 +62,23 @@ func initSegment(f *os.File) (*segment, error) {
 	}
 
 	return &segment{
-		index:    int(info.Index),
-		capacity: int(info.Capacity),
-		// TODO: are these correct?
-		startOffset: fi.Size() - 1,
-		curOffset:   fi.Size() - 1,
+		index:       int(info.Index),
+		capacity:    int(info.Capacity),
+		startOffset: n,
+		lastOffset:  fi.Size() - 1,
 		mtx:         &sync.Mutex{},
 		file:        f,
 	}, nil
 }
 
 // readAt reads the entry in segment starting at offset, it returns an error if there was one.
-func (s *segment) readAt(offset int64) (*pb.Entry, error) {
-	e, _, err := pb.Decode(s.file, offset)
-	if err != nil {
-		return nil, err
-	}
-
-	return e, nil
-}
-
-// scan decodes and returns the entry at offset along with the next segment and offset.
-// It returns an error if there was one.
-func (s *segment) scan(offset int64) (*pb.Entry, int, int64, error) {
+func (s *segment) readAt(offset int64) (*pb.Entry, int64, error) {
 	e, n, err := pb.Decode(s.file, offset)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, err
 	}
 
-	return e, s.index, offset + n, nil
+	return e, n, nil
 }
 
 var (
@@ -103,7 +93,7 @@ func (s *segment) append(e *pb.Entry) (int, int64, error) {
 		return 0, 0, err
 	}
 
-	if (len(bytes) + int(s.curOffset)) > s.capacity {
+	if (len(bytes) + int(s.lastOffset)) > s.capacity {
 		return 0, 0, errSegmentFull
 	}
 
@@ -117,9 +107,9 @@ func (s *segment) append(e *pb.Entry) (int, int64, error) {
 		return 0, 0, err
 	}
 
-	start := s.curOffset
+	start := s.lastOffset
 
-	s.curOffset += int64(n)
+	s.lastOffset += int64(n)
 
 	return s.index, start, nil
 }
