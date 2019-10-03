@@ -243,7 +243,5 @@ func (i *Index) Restore() error {
 		return iterr
 	}
 
-	fmt.Println(i.keys)
-
 	return nil
 }
