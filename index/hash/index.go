@@ -160,7 +160,7 @@ func (i *Index) Get(key string) (string, error) {
 		return "", fmt.Errorf("did not find key: %s in index", string(key))
 	}
 
-	e, err := i.log.ReadAt(loc.segment, loc.offset)
+	e, _, err := i.log.ReadAt(loc.segment, loc.offset)
 	if err != nil {
 		return "", err
 	}
@@ -214,7 +214,8 @@ func (i *Index) Restore() error {
 	done := false
 
 	// get an iterator pointing to the beginning of the commit log
-	it := i.log.IteratorAt(0, 0)
+	it := i.log.Begin()
+	defer it.Done()
 
 	for {
 		// read entries from file until we encounter an eof or an unexpected error

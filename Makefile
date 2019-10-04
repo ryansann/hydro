@@ -4,6 +4,18 @@ run: build
 build:
 	go build -o hydrokv cmd/server/main.go
 
+clean: rm-bin rm-file-data rm-fileseg-data
+	rm -f hydrokv && test 
+
+rm-bin:
+	rm -f hydrokv
+
+rm-file-data:
+	test -f $(HYDRO_FILE_STORAGE_FILEPATH) && rm -f $(HYDRO_FILE_STORAGE_FILEPATH)
+
+rm-fileseg-data:
+	test -f $(HYDRO_FILESEG_STORAGE_DIR) && rm -f $(HYDRO_FILESEG_STORAGE_DIR)
+
 protoc:
 	protoc --go_out=. ./pb/*.proto
 

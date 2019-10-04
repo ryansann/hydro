@@ -6,16 +6,16 @@ import (
 	"github.com/ryansann/hydro/pb"
 )
 
-// Iterator can be used to iterate over entries in the storage layer,
+// iterator can be used to iterate over entries in the storage layer,
 // it implements the store.ForwardIterator interface.
-type Iterator struct {
+type iterator struct {
 	s       *Store
 	segment int
 	offset  int64
 }
 
 // Next returns the next entry, its segment, and its offset or an error if there was one.
-func (i *Iterator) Next() (*pb.Entry, int, int64, error) {
+func (i *iterator) Next() (*pb.Entry, int, int64, error) {
 	if i.segment > len(i.s.segments)-1 {
 		return nil, 0, 0, io.EOF
 	}
@@ -43,7 +43,12 @@ func (i *Iterator) Next() (*pb.Entry, int, int64, error) {
 	offset := i.offset
 
 	// update offset for next call
-	i.offset += n
+	i.offset += int64(n)
 
 	return e, i.segment, offset, nil
+}
+
+// Done releases the mutex held while iterating.
+func (i *iterator) Done() {
+	i.s.mtx.Unlock()
 }

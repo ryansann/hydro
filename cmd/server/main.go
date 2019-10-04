@@ -20,10 +20,11 @@ import (
 // env vars for overriding defaults
 const (
 	// storage env vars
-	storageModeVar    = "HYDRO_STORAGE_MODE"
-	fsFilepathVar     = "HYDRO_FILE_STORAGE_FILEPATH"
-	fsSyncIntervalVar = "HYDRO_FILE_STORAGE_SYNC_INTERVAL"
-	fsegDirVar        = "HYDRO_FILESEG_STORAGE_DIR"
+	storageModeVar     = "HYDRO_STORAGE_MODE"
+	fsFilepathVar      = "HYDRO_FILE_STORAGE_FILEPATH"
+	fsSyncIntervalVar  = "HYDRO_FILE_STORAGE_SYNC_INTERVAL"
+	fsegDirVar         = "HYDRO_FILESEG_STORAGE_DIR"
+	fsegSegmentSizeVar = "HYDRO_FILESEG_STORAGE_SEGMENT_SIZE"
 
 	// index env vars
 	indexModeVar = "HYDRO_INDEX_MODE"
@@ -136,7 +137,19 @@ func createStorer(l *log.Logger) (storage.Storer, error) {
 			dir = defaultDir
 		}
 
-		s, err := fileseg.NewStore(dir)
+		var opts []fileseg.StoreOption
+
+		segSize := os.Getenv(fsegSegmentSizeVar)
+		if segSize != "" {
+			sz, err := strconv.ParseInt(segSize, 10, 64)
+			if err != nil {
+				return nil, err
+			}
+
+			opts = append(opts, fileseg.SegmentSize(int(sz)))
+		}
+
+		s, err := fileseg.NewStore(dir, opts...)
 		if err != nil {
 			return nil, errors.Wrapf(err, "could not create %s storage", filesegStorageMode)
 		}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -51,6 +52,8 @@ type Store struct {
 	dirPath     string
 	segmentSize int
 	segments    []segment
+	// mtx should be held when iterating or compacting previous segments.
+	mtx sync.Mutex
 }
 
 // NewStore returns a new Store object or an error.
@@ -141,21 +144,19 @@ func (s *Store) initSegments() error {
 }
 
 // ReadAt reads the entry from segment starting at offset, returning an error if there was one.
-func (s *Store) ReadAt(segment int, offset int64) (*pb.Entry, error) {
+func (s *Store) ReadAt(segment int, offset int64) (*pb.Entry, int, error) {
 	if segment > len(s.segments) {
-		return nil, fmt.Errorf("segment %v does not exist", segment)
+		return nil, 0, fmt.Errorf("segment %v does not exist", segment)
 	}
 
-	e, _, err := s.segments[segment].readAt(offset)
-	return e, err
+	return s.segments[segment].readAt(offset)
 }
 
-// IteratorAt returns an iterator starting at segment, offset or an error if there was one.
-func (s *Store) IteratorAt(segment int, offset int64) storage.ForwardIterator {
-	return &Iterator{
-		segment: segment,
-		offset:  offset,
-		s:       s,
+// Begin returns an iterator to the beginning of the storage log, and locks the log from writes while iterating.
+func (s *Store) Begin() storage.ForwardIterator {
+	s.mtx.Lock()
+	return &iterator{
+		s: s,
 	}
 }
 
@@ -181,6 +182,10 @@ func (s *Store) Append(e *pb.Entry) (int, int64, error) {
 
 // Close closes all underlying segment files and stops background processes.
 func (s *Store) Close() error {
+	// acquire the lock for the store, no in progress iterators or background processe during close.
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+
 	for _, seg := range s.segments {
 		_ = seg.file.Close()
 	}

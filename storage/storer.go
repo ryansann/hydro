@@ -15,9 +15,9 @@ type Storer interface {
 	// ReadAt defines behavior for a random access reader that reads bytes from the underlying storage at segment starting at offset.
 	// Since the storage entry should be length aware, ReadAt does not need to be given the number of bytes to read,
 	// it will get this information when it decodes the storage entry. It returns the entry and the number of bytes read, or an error if there was one.
-	ReadAt(segment int, offset int64) (*pb.Entry, error)
-	// IteratorAt returns an iterator starting at segment, offset.
-	IteratorAt(segment int, offset int64) ForwardIterator
+	ReadAt(segment int, offset int64) (*pb.Entry, int, error)
+	// Begin returns a forward iterator for iterating over storage entries, starting at the beginning of the storage log.
+	Begin() ForwardIterator
 	// Append writes data to the tail of the underlying storage, returning the segment and offset where the data starts.
 	// If it can't perform the append operation it returns an error.
 	Append(e *pb.Entry) (int, int64, error)
@@ -26,8 +26,12 @@ type Storer interface {
 }
 
 // ForwardIterator defines behavior for iterating forward over a store's entries. ForwardIterators are not safe for concurrent use.
+// A ForwardIterator can be used to restore an index.
 type ForwardIterator interface {
 	// Next returns the next entry, its segment, and its starting offset or an error if there was one.
 	// io.EOF error is returned once the end of the storage is reached or if an out of bounds segment and offset were provided as a starting point.
 	Next() (*pb.Entry, int, int64, error)
+	// Done releases any locks that may have been preventing compaction and merge processes while the iterator is being held.
+	// Done must be called after finsihing with a ForwardIterator.
+	Done()
 }

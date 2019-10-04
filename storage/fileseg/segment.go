@@ -72,7 +72,7 @@ func initSegment(f *os.File) (*segment, error) {
 }
 
 // readAt reads the entry in segment starting at offset, it returns an error if there was one.
-func (s *segment) readAt(offset int64) (*pb.Entry, int64, error) {
+func (s *segment) readAt(offset int64) (*pb.Entry, int, error) {
 	e, n, err := pb.Decode(s.file, offset)
 	if err != nil {
 		return nil, 0, err

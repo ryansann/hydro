@@ -77,22 +77,13 @@ func NewStore(file string, opts ...StoreOption) (*Store, error) {
 
 // ReadAt reads and decodes the entry at segment, offset. In this case since we are using a single
 // file, the segment number should be 0. It returns the entry or an error if it could not read the entry at segment and offset.
-func (s *Store) ReadAt(segment int, offset int64) (*pb.Entry, error) {
-	e, _, err := pb.Decode(s.file, offset)
-	if err != nil {
-		return nil, err
-	}
-
-	return e, nil
+func (s *Store) ReadAt(segment int, offset int64) (*pb.Entry, int, error) {
+	return pb.Decode(s.file, offset)
 }
 
-// IteratorAt decodes and returns the entry at segment, offset along with the next segment and next offset to scan from.
-// If it is unsuccessful in decoding the entry it returns an error.
-func (s *Store) IteratorAt(segment int, offset int64) storage.ForwardIterator {
-	return &Iterator{
-		offset: offset,
-		s:      s,
-	}
+// Begin returns an iterator to the beginning of the storage log.
+func (s *Store) Begin() storage.ForwardIterator {
+	return &iterator{s: s}
 }
 
 // Append appends data to the file and returns the segment and staring offset, otherwise it returns an error.

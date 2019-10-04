@@ -20,7 +20,7 @@ type OffsetReader interface {
 // Decode reads from r starting at offset. It first gets the little endian encoded length
 // of the Entry data, and then reads the log entry's bytes. Once read it unmarshals them
 // into a log entry, which it returns along with the number of bytes read [4 + len(log-entry-bytes)] unless an error occurs.
-func Decode(r OffsetReader, offset int64) (*Entry, int64, error) {
+func Decode(r OffsetReader, offset int64) (*Entry, int, error) {
 	// read the bytes storing the size of the data
 	sb := make([]byte, 4) // stored as uint32 (4 bytes)
 	_, err := r.ReadAt(sb, offset)
@@ -45,7 +45,7 @@ func Decode(r OffsetReader, offset int64) (*Entry, int64, error) {
 		return nil, 0, errors.Wrap(err, "could not unmarshal bytes")
 	}
 
-	return &entry, int64(4 + len(data)), nil
+	return &entry, 4 + len(data), nil
 }
 
 // DecodeInfo reads from r starting at offset. It first gets the little endian encoded length
