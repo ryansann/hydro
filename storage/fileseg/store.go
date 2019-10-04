@@ -14,6 +14,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/ryansann/hydro/pb"
 	"github.com/ryansann/hydro/storage"
+	"github.com/sirupsen/logrus"
 )
 
 // StoreOption is func that modifies the store's configuration options.
@@ -49,6 +50,7 @@ func Compaction(enabled bool) StoreOption {
 // Store provides operations for persisting to a data directory where storage segments are written as files.
 // It implements the storage.Storer interface.
 type Store struct {
+	log         *logrus.Logger
 	dirPath     string
 	segmentSize int
 	segments    []segment
@@ -58,7 +60,7 @@ type Store struct {
 
 // NewStore returns a new Store object or an error.
 // It accepts a data directory and options for overriding default behavior.
-func NewStore(dir string, opts ...StoreOption) (*Store, error) {
+func NewStore(log *logrus.Logger, dir string, opts ...StoreOption) (*Store, error) {
 	// default configuration
 	cfg := &options{
 		sync:        15 * time.Second,
@@ -87,6 +89,7 @@ func NewStore(dir string, opts ...StoreOption) (*Store, error) {
 	}
 
 	s := &Store{
+		log:         log,
 		dirPath:     path,
 		segmentSize: cfg.segmentSize,
 	}

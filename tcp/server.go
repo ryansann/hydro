@@ -4,14 +4,13 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"log"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/ryansann/hydro/index"
+	"github.com/sirupsen/logrus"
 )
 
 // ServerOption overrides a default option
@@ -19,7 +18,6 @@ type ServerOption func(*options)
 
 type options struct {
 	port            string
-	log             *log.Logger
 	readTimeout     time.Duration
 	shutdownTimeout time.Duration
 }
@@ -28,13 +26,6 @@ type options struct {
 func Port(p string) ServerOption {
 	return func(opts *options) {
 		opts.port = p
-	}
-}
-
-// Logger overrides default logger to the one passed in
-func Logger(l *log.Logger) ServerOption {
-	return func(opts *options) {
-		opts.log = l
 	}
 }
 
@@ -61,7 +52,7 @@ func ShutdownTimeout(t time.Duration) ServerOption {
 type Server struct {
 	mtx             sync.Mutex
 	port            string
-	log             *log.Logger
+	log             *logrus.Logger
 	index           index.Indexer
 	ln              net.Listener
 	handlers        sync.WaitGroup
@@ -77,10 +68,9 @@ const (
 )
 
 // NewServer returns a configured Server instance ready to start serving
-func NewServer(index index.Indexer, opts ...ServerOption) (*Server, error) {
+func NewServer(log *logrus.Logger, index index.Indexer, opts ...ServerOption) (*Server, error) {
 	cfg := &options{
 		port:            ":8080",
-		log:             log.New(os.Stdout, "", log.LstdFlags|log.Lshortfile),
 		readTimeout:     defaultReadTimeout,
 		shutdownTimeout: defaultShutdownTimeout,
 	}
@@ -92,7 +82,7 @@ func NewServer(index index.Indexer, opts ...ServerOption) (*Server, error) {
 	return &Server{
 		mtx:             sync.Mutex{},
 		port:            cfg.port,
-		log:             cfg.log,
+		log:             log,
 		index:           index,
 		handlers:        sync.WaitGroup{},
 		readTimeout:     cfg.readTimeout,
@@ -106,18 +96,18 @@ func NewServer(index index.Indexer, opts ...ServerOption) (*Server, error) {
 func (s *Server) Serve() {
 	defer func() {
 		if ok := s.wait(); ok {
-			s.log.Println("connection handlers exited normally")
+			s.log.Info("connection handlers exited normally")
 		} else {
-			s.log.Println("timed out waiting for connection handlers to exit")
+			s.log.Error("timed out waiting for connection handlers to exit")
 		}
 		close(s.exited)
 	}()
 
-	s.log.Printf("accepting connections on port %s\n", s.port)
+	s.log.Infof("accepting connections on port %s", s.port)
 
 	ln, err := net.Listen("tcp", s.port)
 	if err != nil {
-		s.log.Fatalf("fatal: %v\n", err)
+		s.log.Fatal(err)
 	}
 
 	s.mtx.Lock()
@@ -133,12 +123,12 @@ func (s *Server) Serve() {
 			// only log the error if it isn't due to a closed network connection
 			// not sure how else to detect this since something like net.errClosed isn't exported from net package
 			if !strings.Contains(err.Error(), "closed network connection") {
-				s.log.Printf("error accepting connection: %v\n", err)
+				s.log.Infof("error accepting connection: %v", err)
 			}
 
 			select {
 			case <-s.close:
-				s.log.Println("closing")
+				s.log.Info("closing")
 
 				// close open connections
 				cancel()
@@ -147,7 +137,7 @@ func (s *Server) Serve() {
 			default:
 			}
 		} else {
-			s.log.Printf("accepted new connection from: %s\n", c.RemoteAddr().String())
+			s.log.Infof("accepted new connection from: %s", c.RemoteAddr().String())
 			s.handlers.Add(1)
 			go s.handle(ctx, newConn(c))
 		}
@@ -161,11 +151,12 @@ func (s *Server) Close() error {
 
 	err := s.ln.Close()
 	if err != nil {
-		s.log.Printf("error closing listener: %v\n", err)
+		s.log.Errorf("error closing listener: %v", err)
 	}
 
 	// close the close channel to tell server to shutdown
 	close(s.close)
+
 	// wait for server to exit (wait for handlers to finish)
 	<-s.exited
 
@@ -186,11 +177,11 @@ func newConn(c net.Conn) *conn {
 
 func (s *Server) handle(ctx context.Context, c *conn) {
 	defer func() {
-		s.log.Printf("closing connection from: %v\n", c.RemoteAddr())
+		s.log.Infof("closing connection from: %v", c.RemoteAddr())
 
 		err := c.Close()
 		if err != nil {
-			s.log.Printf("error closing connection: %v\n", err)
+			s.log.Errorf("error closing connection: %v", err)
 		}
 
 		s.handlers.Done()
@@ -211,21 +202,21 @@ func (s *Server) handle(ctx context.Context, c *conn) {
 			l, _, err := reader.ReadLine()
 			if err != nil {
 				if strings.Contains(err.Error(), "i/o timeout") {
-					s.log.Println("read timeout")
+					s.log.Error("read timeout")
 				}
 				return
 			}
 
 			cmd, err := parseCommand(string(l))
 			if err != nil {
-				s.log.Println("failed to parse command")
+				s.log.Error("failed to parse command")
 				c.Write([]byte(fmt.Sprintf("PARSE FAILED: %v\n", err)))
 				continue
 			}
 
 			res, err := cmd.execute(c.close, s.index)
 			if err != nil {
-				s.log.Printf("failed to execute command: %s %s %s\n", commands[cmd.op], cmd.key, cmd.val)
+				s.log.Errorf("failed to execute command: %s %s %s", commands[cmd.op], cmd.key, cmd.val)
 				c.Write([]byte(fmt.Sprintf("EXECUTION FAILED: %v\n", err)))
 				continue
 			}

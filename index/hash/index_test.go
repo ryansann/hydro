@@ -1,10 +1,12 @@
 package hash
 
 import (
+	"io/ioutil"
 	"reflect"
 	"testing"
 
 	"github.com/ryansann/hydro/storage/file"
+	"github.com/sirupsen/logrus"
 )
 
 // NOTE: Should remove the dependency on storage/file here
@@ -53,7 +55,7 @@ func TestIndexWrite(t *testing.T) {
 }
 
 func runIndexSetTest(t *testing.T, h KeyHashFunc) {
-	s, err := file.NewStore(storageFile)
+	s, err := file.NewStore(logger(), storageFile)
 	if err != nil {
 		t.Error(err)
 	}
@@ -64,7 +66,7 @@ func runIndexSetTest(t *testing.T, h KeyHashFunc) {
 		}
 	}()
 
-	i, err := NewIndex(s, SetHashFunc(h))
+	i, err := NewIndex(logger(), s, SetHashFunc(h))
 	if err != nil {
 		t.Error(err)
 	}
@@ -89,7 +91,7 @@ func TestIndexGet(t *testing.T) {
 }
 
 func runIndexGetTest(t *testing.T, h KeyHashFunc) {
-	s, err := file.NewStore(storageFile)
+	s, err := file.NewStore(logger(), storageFile)
 	if err != nil {
 		t.Error(err)
 	}
@@ -100,7 +102,7 @@ func runIndexGetTest(t *testing.T, h KeyHashFunc) {
 		}
 	}()
 
-	i, err := NewIndex(s, SetHashFunc(h))
+	i, err := NewIndex(logger(), s, SetHashFunc(h))
 	if err != nil {
 		t.Error(err)
 	}
@@ -138,7 +140,7 @@ func TestIndexDelete(t *testing.T) {
 }
 
 func runIndexDeleteTest(t *testing.T, h KeyHashFunc) {
-	s, err := file.NewStore(storageFile)
+	s, err := file.NewStore(logger(), storageFile)
 	if err != nil {
 		t.Error(err)
 	}
@@ -149,7 +151,7 @@ func runIndexDeleteTest(t *testing.T, h KeyHashFunc) {
 		}
 	}()
 
-	i, err := NewIndex(s, SetHashFunc(h))
+	i, err := NewIndex(logger(), s, SetHashFunc(h))
 	if err != nil {
 		t.Error(err)
 	}
@@ -188,7 +190,7 @@ func TestIndexRestore(t *testing.T) {
 }
 
 func runIndexRestoreTest(t *testing.T, h KeyHashFunc) {
-	s, err := file.NewStore(storageFile)
+	s, err := file.NewStore(logger(), storageFile)
 	if err != nil {
 		t.Error(err)
 	}
@@ -199,7 +201,7 @@ func runIndexRestoreTest(t *testing.T, h KeyHashFunc) {
 		}
 	}()
 
-	i, err := NewIndex(s, SetHashFunc(h))
+	i, err := NewIndex(logger(), s, SetHashFunc(h))
 	if err != nil {
 		t.Error(err)
 	}
@@ -251,7 +253,7 @@ func BenchmarkIndexWrite(b *testing.B) {
 func runBenchIndexWrite(b *testing.B, h KeyHashFunc) {
 	k, v := "key", "val"
 
-	s, err := file.NewStore(storageFile)
+	s, err := file.NewStore(logger(), storageFile)
 	if err != nil {
 		b.Error(err)
 	}
@@ -262,7 +264,7 @@ func runBenchIndexWrite(b *testing.B, h KeyHashFunc) {
 		}
 	}()
 
-	i, err := NewIndex(s, SetHashFunc(h))
+	i, err := NewIndex(logger(), s, SetHashFunc(h))
 	if err != nil {
 		b.Error(err)
 	}
@@ -277,4 +279,12 @@ func runBenchIndexWrite(b *testing.B, h KeyHashFunc) {
 			b.Error(err)
 		}
 	}
+}
+
+// logger returns a logrus.Logger that doesn't log.
+func logger() *logrus.Logger {
+	log := logrus.StandardLogger()
+	log.SetLevel(logrus.FatalLevel)
+	log.SetOutput(ioutil.Discard)
+	return log
 }

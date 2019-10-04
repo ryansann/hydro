@@ -21,6 +21,7 @@ import (
 
 	"github.com/ryansann/hydro/pb"
 	"github.com/ryansann/hydro/storage"
+	"github.com/sirupsen/logrus"
 )
 
 // KeyHashFunc is a hash func that takes a slice of bytes and returns a hash or an error
@@ -73,7 +74,9 @@ type entryLocation struct {
 
 // Index is a hash index implementation
 type Index struct {
-	log storage.Storer
+	log *logrus.Logger
+
+	store storage.Storer
 
 	// mtx guards keys
 	mtx  sync.RWMutex
@@ -84,7 +87,7 @@ type Index struct {
 
 // NewIndex accepts a variadic number of option funcs for configuration.
 // It returns a configured Hash Index ready to start running operations.
-func NewIndex(store storage.Storer, opts ...IndexOption) (*Index, error) {
+func NewIndex(log *logrus.Logger, store storage.Storer, opts ...IndexOption) (*Index, error) {
 	// default config
 	cfg := &options{
 		hash:    NoHash,
@@ -96,9 +99,10 @@ func NewIndex(store storage.Storer, opts ...IndexOption) (*Index, error) {
 	}
 
 	i := &Index{
-		log:  store,
-		keys: make(map[string]entryLocation, 0),
-		hash: cfg.hash,
+		log:   log,
+		store: store,
+		keys:  make(map[string]entryLocation, 0),
+		hash:  cfg.hash,
 	}
 
 	if cfg.restore {
@@ -132,7 +136,7 @@ func (i *Index) Set(key string, val string) error {
 	defer i.mtx.Unlock()
 
 	// append entry to storage log
-	seg, off, err := i.log.Append(entry)
+	seg, off, err := i.store.Append(entry)
 	if err != nil {
 		return err
 	}
@@ -160,7 +164,7 @@ func (i *Index) Get(key string) (string, error) {
 		return "", fmt.Errorf("did not find key: %s in index", string(key))
 	}
 
-	e, _, err := i.log.ReadAt(loc.segment, loc.offset)
+	e, _, err := i.store.ReadAt(loc.segment, loc.offset)
 	if err != nil {
 		return "", err
 	}
@@ -194,7 +198,7 @@ func (i *Index) Del(key string) error {
 	}
 
 	// append deletion entry to storage log
-	_, _, err = i.log.Append(entry)
+	_, _, err = i.store.Append(entry)
 	if err != nil {
 		return err
 	}
@@ -214,7 +218,7 @@ func (i *Index) Restore() error {
 	done := false
 
 	// get an iterator pointing to the beginning of the commit log
-	it := i.log.Begin()
+	it := i.store.Begin()
 	defer it.Done()
 
 	for {

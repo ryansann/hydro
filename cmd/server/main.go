@@ -15,10 +15,14 @@ import (
 	"github.com/ryansann/hydro/storage/file"
 	"github.com/ryansann/hydro/storage/fileseg"
 	"github.com/ryansann/hydro/tcp"
+	"github.com/sirupsen/logrus"
 )
 
 // env vars for overriding defaults
 const (
+	// application env vars
+	logLevelVar = "HYDRO_LOG_LEVEL"
+
 	// storage env vars
 	storageModeVar     = "HYDRO_STORAGE_MODE"
 	fsFilepathVar      = "HYDRO_FILE_STORAGE_FILEPATH"
@@ -37,7 +41,10 @@ const (
 )
 
 func main() {
-	l := log.New(os.Stdout, "", log.LstdFlags|log.Lshortfile)
+	l, err := createLogger()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	s, err := createStorer(l)
 	if err != nil {
@@ -50,18 +57,18 @@ func main() {
 		l.Fatal(err)
 	}
 
-	idx, err := hash.NewIndex(s, iopts...)
+	idx, err := hash.NewIndex(l, s, iopts...)
 	if err != nil {
 		l.Fatalf("could not create index: %v", err)
 	}
 
-	sopts, err := serverOpts(l)
+	sopts, err := serverOpts()
 	if err != nil {
 		l.Fatal(err)
 	}
 
 	// server uses default hash.Index as a store
-	srv, err := tcp.NewServer(idx, sopts...)
+	srv, err := tcp.NewServer(l, idx, sopts...)
 	if err != nil {
 		l.Fatal(err)
 	}
@@ -85,6 +92,44 @@ func main() {
 	srv.Serve()
 }
 
+var (
+	// allowedLogLevels are the levels which hydro supports
+	allowedLogLevels = map[logrus.Level]struct{}{
+		logrus.DebugLevel: struct{}{},
+		logrus.InfoLevel:  struct{}{},
+		logrus.ErrorLevel: struct{}{},
+	}
+)
+
+const (
+	// if level is unset this will be used
+	defaultLogLevel = logrus.InfoLevel
+)
+
+// createLogger parses the log level and returns a logrus logger set with that level.
+func createLogger() (*logrus.Logger, error) {
+	var err error
+	var level logrus.Level
+
+	if lvl := os.Getenv(logLevelVar); lvl != "" {
+		level, err = logrus.ParseLevel(lvl)
+		if err != nil {
+			return nil, err
+		}
+
+		if _, ok := allowedLogLevels[level]; !ok {
+			return nil, fmt.Errorf("unsupported log level: %s", lvl)
+		}
+	} else {
+		level = defaultLogLevel
+	}
+
+	log := logrus.New()
+	log.SetLevel(level)
+
+	return log, nil
+}
+
 // storage mode constants
 const (
 	fileStorageMode    = "file"
@@ -97,7 +142,7 @@ const (
 )
 
 // createStorer uses the environment to instantiate the storage layer, which is returned if there was no error.
-func createStorer(l *log.Logger) (storage.Storer, error) {
+func createStorer(l *logrus.Logger) (storage.Storer, error) {
 	mode := os.Getenv(storageModeVar)
 	if mode == "" {
 		l.Printf("defaulting storage mode to %+q\n", fileStorageMode)
@@ -124,7 +169,7 @@ func createStorer(l *log.Logger) (storage.Storer, error) {
 			opts = append(opts, file.SyncInterval(dur))
 		}
 
-		s, err := file.NewStore(fpath)
+		s, err := file.NewStore(l, fpath)
 		if err != nil {
 			return nil, errors.Wrapf(err, "could not create %s storage", fileStorageMode)
 		}
@@ -149,7 +194,7 @@ func createStorer(l *log.Logger) (storage.Storer, error) {
 			opts = append(opts, fileseg.SegmentSize(int(sz)))
 		}
 
-		s, err := fileseg.NewStore(dir, opts...)
+		s, err := fileseg.NewStore(l, dir, opts...)
 		if err != nil {
 			return nil, errors.Wrapf(err, "could not create %s storage", filesegStorageMode)
 		}
@@ -163,10 +208,8 @@ func createStorer(l *log.Logger) (storage.Storer, error) {
 }
 
 // serverOpts constructs the list of options to provide to the hydro tcp server.
-func serverOpts(l *log.Logger) ([]tcp.ServerOption, error) {
+func serverOpts() ([]tcp.ServerOption, error) {
 	var opts []tcp.ServerOption
-
-	opts = append(opts, tcp.Logger(l))
 
 	if port := os.Getenv(portVar); port != "" {
 		opts = append(opts, tcp.Port(port))
