@@ -129,6 +129,7 @@ func (s *Store) Close() error {
 
 // syncLoop syncs the file contents to disk every s.sync interval,
 // it exits when it receives a signal on the s.done channel.
+// NOTE: this isn't strictly necessary, see: https://stackoverflow.com/questions/10862375/when-to-flush-a-file-in-go
 func (s *Store) syncLoop() {
 	for {
 		select {

@@ -113,6 +113,8 @@ func (s *Store) initSegments() error {
 
 	// if there are no existing segments, create the first and return
 	if len(files) == 0 {
+		s.log.Debug("no existing storage files found")
+
 		seg, err := newSegment(strings.Join([]string{s.dirPath, uuid.New().String()}, "/"), 0, s.segmentSize)
 		if err != nil {
 			return err
@@ -137,6 +139,8 @@ func (s *Store) initSegments() error {
 		if err != nil {
 			return errors.Wrapf(err, "could not initialize segment from: %s", fpath)
 		}
+
+		s.log.Debugf("initialized segement: %+v", *seg)
 
 		segments[seg.index] = *seg
 	}

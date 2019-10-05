@@ -132,6 +132,8 @@ func (i *Index) Set(key string, val string) error {
 		Value: vbytes,
 	}
 
+	i.log.Debugf("setting entry: %+v", *entry)
+
 	i.mtx.Lock()
 	defer i.mtx.Unlock()
 
@@ -169,6 +171,8 @@ func (i *Index) Get(key string) (string, error) {
 		return "", err
 	}
 
+	i.log.Debugf("got entry with key: %s", hash)
+
 	// return the value for the key
 	return string(e.GetValue()), nil
 }
@@ -196,6 +200,8 @@ func (i *Index) Del(key string) error {
 		Key:   hash,
 		Value: []byte{},
 	}
+
+	i.log.Debugf("setting entry: %+v", *entry)
 
 	// append deletion entry to storage log
 	_, _, err = i.store.Append(entry)
@@ -234,6 +240,8 @@ func (i *Index) Restore() error {
 			break
 		}
 
+		i.log.Debugf("iterator yielded entry: %+v", *e)
+
 		// add the key if we encounter a write entry, delete it if we encounter a delete entry.
 		switch e.GetType() {
 		case pb.EntryType_WRITE:
@@ -247,6 +255,8 @@ func (i *Index) Restore() error {
 	if !done {
 		return iterr
 	}
+
+	i.log.Info("index restored")
 
 	return nil
 }

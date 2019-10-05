@@ -191,9 +191,11 @@ func (s *Server) handle(ctx context.Context, c *conn) {
 	for {
 		select {
 		case <-ctx.Done():
+			s.log.Infof("closing connection for %s", c.RemoteAddr().String())
 			c.Write([]byte("CLOSING\n"))
 			return
 		case <-c.close:
+			s.log.Infof("client %s closed connection", c.RemoteAddr().String())
 			c.Write([]byte("QUITTING\n"))
 			return
 		default:
@@ -221,6 +223,8 @@ func (s *Server) handle(ctx context.Context, c *conn) {
 				continue
 			}
 
+			s.log.Debugf("client %s executed command: %s %s %s", c.RemoteAddr().String(), commands[cmd.op], cmd.key, cmd.val)
+
 			if res != "" {
 				c.Write([]byte(fmt.Sprintf("%s\n", res)))
 			} else {
@@ -233,10 +237,12 @@ func (s *Server) handle(ctx context.Context, c *conn) {
 // wait waits for wg. If waiting finishes before timeout, it returns true, otherwise it returns false.
 func (s *Server) wait() bool {
 	c := make(chan struct{})
+
 	go func() {
 		defer close(c)
 		s.handlers.Wait()
 	}()
+
 	select {
 	case <-c:
 		return true // completed normally
