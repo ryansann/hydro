@@ -95,6 +95,7 @@ func main() {
 var (
 	// allowedLogLevels are the levels which hydro supports
 	allowedLogLevels = map[logrus.Level]struct{}{
+		logrus.TraceLevel: struct{}{},
 		logrus.DebugLevel: struct{}{},
 		logrus.InfoLevel:  struct{}{},
 		logrus.ErrorLevel: struct{}{},
@@ -125,7 +126,12 @@ func createLogger() (*logrus.Logger, error) {
 	}
 
 	log := logrus.New()
+
 	log.SetLevel(level)
+	log.SetFormatter(&logrus.TextFormatter{
+		DisableColors: true,
+		FullTimestamp: true,
+	})
 
 	return log, nil
 }

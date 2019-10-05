@@ -113,9 +113,9 @@ func (s *Store) initSegments() error {
 
 	// if there are no existing segments, create the first and return
 	if len(files) == 0 {
-		s.log.Debug("no existing storage files found")
+		s.log.Debug("no existing storage files found, initializing")
 
-		seg, err := newSegment(strings.Join([]string{s.dirPath, uuid.New().String()}, "/"), 0, s.segmentSize)
+		seg, err := newSegment(s.getNewFilePath(), 0, s.segmentSize)
 		if err != nil {
 			return err
 		}
@@ -128,7 +128,7 @@ func (s *Store) initSegments() error {
 	// if there are existing segments we need to initialize data structures
 	segments := make([]segment, len(files))
 	for _, file := range files {
-		fpath := strings.Join([]string{s.dirPath, file.Name()}, "/")
+		fpath := s.getFilePath(file.Name())
 
 		f, err := os.OpenFile(fpath, os.O_APPEND|os.O_RDWR, 0644)
 		if err != nil {
@@ -171,11 +171,12 @@ func (s *Store) Begin() storage.ForwardIterator {
 func (s *Store) Append(e *pb.Entry) (int, int64, error) {
 	idx, offset, err := s.segments[len(s.segments)-1].append(e)
 	if err != nil && err == errSegmentFull {
-		fpath := strings.Join([]string{s.dirPath, uuid.New().String()}, "/")
-		seg, err := newSegment(fpath, len(s.segments), s.segmentSize)
+		seg, err := newSegment(s.getNewFilePath(), len(s.segments), s.segmentSize)
 		if err != nil {
 			return 0, 0, err
 		}
+
+		s.log.Debugf("segment %v full, new segment created", len(s.segments)-1)
 
 		s.segments = append(s.segments, *seg)
 
@@ -198,4 +199,14 @@ func (s *Store) Close() error {
 	}
 
 	return nil
+}
+
+// getFilePath returns the full path of the file with name.
+func (s *Store) getFilePath(name string) string {
+	return strings.Join([]string{s.dirPath, name}, "/")
+}
+
+// getNewFilePath returns the full path for a new data file.
+func (s *Store) getNewFilePath() string {
+	return s.dirPath + "/" + uuid.New().String() + ".data"
 }

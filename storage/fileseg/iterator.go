@@ -33,6 +33,7 @@ func (i *iterator) Next() (*pb.Entry, int, int64, error) {
 		}
 
 		i.segment++
+		i.offset = i.s.segments[i.segment].startOffset
 	}
 
 	e, n, err := i.s.segments[i.segment].readAt(i.offset)
