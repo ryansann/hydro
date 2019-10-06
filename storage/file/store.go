@@ -230,8 +230,7 @@ func (s *Store) syncLoop() {
 			err := s.file.Sync()
 			s.fmtx.Unlock()
 			if err != nil {
-				// TODO: change to log
-				fmt.Println(err)
+				s.log.Error(err)
 			}
 		case <-s.done:
 			return

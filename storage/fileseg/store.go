@@ -9,6 +9,7 @@ package fileseg
 
 import (
 	"fmt"
+	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -73,7 +74,7 @@ type Store struct {
 
 	// smtx guards segments
 	smtx sync.Mutex
-	// segments maps segment indexes to the corresponding segment
+	// segments stores references to segments
 	segments []*segment
 }
 
@@ -145,12 +146,17 @@ func (s *Store) init() error {
 			return err
 		}
 
-		// initialize segments map
+		// initialize segments list
 		s.segments = append(s.segments, seg)
 
 		return nil
 	}
 
+	return s.restore(files)
+}
+
+// restore restores segments and the store's page table from existing files in the storage directory.
+func (s *Store) restore(files []os.FileInfo) error {
 	var nextPos int64
 	segments := make([]*segment, len(files))
 
@@ -158,14 +164,8 @@ func (s *Store) init() error {
 	for _, file := range files {
 		fpath := s.getFilePath(file.Name())
 
-		// open data file
-		f, err := os.OpenFile(fpath, os.O_APPEND|os.O_RDWR, 0644)
-		if err != nil {
-			return errors.Wrapf(err, "could not create/open file: %s", fpath)
-		}
-
 		// initialize segment from data file
-		seg, positions, err := initSegment(f)
+		seg, positions, err := initSegment(fpath)
 		if err != nil {
 			return errors.Wrapf(err, "could not initialize segment from: %s", fpath)
 		}
@@ -186,11 +186,13 @@ func (s *Store) init() error {
 		}
 	}
 
-	// set the segments map to the initialized segments map
+	// set the segments list to the initialized segments list
 	s.segments = segments
 
 	// update nextPos to the maximum position seen + 1
 	s.nextPos.Store(nextPos + 1)
+
+	s.log.Tracef("restored page table: %v", s.pageTable)
 
 	return nil
 }
@@ -269,7 +271,10 @@ func (s *Store) appendNewSegment(e *pb.Entry) (int64, error) {
 
 	s.log.Debugf("segment %v full, new segment created", len(s.segments)-1)
 
+	// append the new segment to segment list
+	s.smtx.Lock()
 	s.segments = append(s.segments, seg)
+	s.smtx.Unlock()
 
 	// run compaction on old segments when a new one is created
 	go s.compact()
@@ -298,14 +303,100 @@ func (s *Store) Close() error {
 }
 
 // compact rewrites previous segments with the entries that affect the current index state only.
-// Compaction removes entries that are no longer needed for maintaining an index, and thus reduce storage space.
+// Compaction removes entries that are no longer needed for maintaining an index, and thus reduces storage space.
 // Compaction writes to new segment files, removing previous ones after completed.
-// For example:
-// {write, hello, world}{delete, hello}{write, hello, worldagain}
+// A segment with entries:
+// {write, hello, world, 0}{delete, hello, 1}{write, hello, worldagain, 2}
 // can be compacted to:
-// {write, hello, worldagain}
+// {write, hello, worldagain, 2}
+// NOTE: this is a relatively naive compaction algorithm.
+// - it is triggered every time a new segment is created due to its capacity being reached
+// - it compacts all previous segments, which isn't necessary. Can be improved by compacting only the most recent segment whose capacity was reached.
+// - it does not compact across segments
+// - it does not merge segments and reindex
 func (s *Store) compact() {
+	// if there's one or zero segments, there's nothing to compact
+	if len(s.segments) <= 1 {
+		return
+	}
 
+	s.log.Debug("starting compaction process")
+
+	// iterate over every segment but the last
+	for i := 0; i < len(s.segments)-1; i++ {
+		seg := s.segments[i]
+
+		s.log.Debugf("compacting segment: %v", i)
+
+		// create a new segment
+		compactedSeg, err := newSegment(s.getNewFilePath(), i, seg.capacity)
+		if err != nil {
+			s.log.Errorf("could not create new segment during compaction process: %v", err)
+			return
+		}
+
+		it := &segmentIterator{seg, seg.startOffset.Load()}
+
+		var iterr error
+		var done bool
+		entries := make(map[string]*pb.Entry, 0)
+
+		for {
+			e, _, _, err := it.next()
+			if err != nil {
+				if err == io.EOF { // finished iterating over segment file
+					done = true
+					break
+				}
+
+				iterr = err
+				break
+			}
+
+			switch e.GetType() {
+			case pb.EntryType_WRITE:
+				entries[e.GetKey()] = e
+			case pb.EntryType_DELETE:
+				delete(entries, e.GetKey())
+			}
+		}
+
+		if !done {
+			s.log.Errorf("error iterating over segment during compaction: %v, %v", i, iterr)
+			return
+		}
+
+		s.log.Debugf("finished iterating over segment: %v", i)
+
+		// serialize compacted entries to new segment
+		for _, e := range entries {
+			err := compactedSeg.append(e)
+			if err != nil {
+				s.log.Errorf("could not append entry with position: %v to compacted segment with index: %v", e.GetPosition(), seg.index)
+				return
+			}
+		}
+
+		// overwrite existing segment
+		s.smtx.Lock()
+		s.segments[seg.index] = compactedSeg
+		s.smtx.Unlock()
+
+		// log how many bytes we saved through compaction
+		sinfo, serr := seg.file.Stat()
+		cinfo, cerr := compactedSeg.file.Stat()
+		if cerr == nil && serr == nil {
+			s.log.Infof("compaction removed %v bytes for segment: %v", sinfo.Size()-cinfo.Size(), i)
+		}
+
+		// cleanup old segment
+		err = seg.remove()
+		if err != nil {
+			s.log.Errorf("could not remove old segment file: %v", err)
+		}
+
+		s.log.Infof("segment %v successfully compacted", i)
+	}
 }
 
 // getFilePath returns the full path of the file with name.

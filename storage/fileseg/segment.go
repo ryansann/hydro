@@ -17,6 +17,8 @@ type segment struct {
 	index int
 	// capacity is the number of bytes a segment can hold, a given segment will not exceed capacity
 	capacity int
+	// path is the full path of segments storage file, used for removal
+	path string
 
 	// startOffset is the offset where entry records start, e.g. after segment info
 	startOffset *atomic.Int64
@@ -63,6 +65,7 @@ func newSegment(path string, index int, capacity int) (*segment, error) {
 	return &segment{
 		index:       index,
 		capacity:    capacity,
+		path:        path,
 		startOffset: atomic.NewInt64(n64),
 		lastOffset:  atomic.NewInt64(n64),
 		pmtx:        &sync.RWMutex{},
@@ -72,11 +75,17 @@ func newSegment(path string, index int, capacity int) (*segment, error) {
 	}, nil
 }
 
-// initSegment reads an existing file and creates the corresponding segment object.
+// initSegment opens and iterates over an existing storage file at path, and creates the corresponding segment object.
 // It returns the segment object and the list of positions found in the segment file's entries.
 // It uses the encoded SegmentInfo at the beginning of the file for segment sepcific metadata.
 // It returns an error if it cannot create the segment object.
-func initSegment(f *os.File) (*segment, []int64, error) {
+func initSegment(path string) (*segment, []int64, error) {
+	// open storage file
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_RDWR, 0644)
+	if err != nil {
+		return nil, nil, errors.Wrapf(err, "could not open file: %s", path)
+	}
+
 	// decode the segment info starting at offset 0 of file
 	info, n, err := pb.DecodeInfo(f, 0)
 	if err != nil {
@@ -218,6 +227,17 @@ func (s *segment) append(e *pb.Entry) error {
 
 	// update segment's last offset atomically
 	_ = s.lastOffset.Add(int64(n))
+
+	return nil
+}
+
+// remove removes the segments backing storage file, it can be used during compaction
+// in order to cleanup old segments.
+func (s *segment) remove() error {
+	err := os.Remove(s.path)
+	if err != nil {
+		return errors.Wrapf(err, "could not remove segment file at path: %s", s.path)
+	}
 
 	return nil
 }
