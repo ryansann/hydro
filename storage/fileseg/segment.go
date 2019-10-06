@@ -71,7 +71,7 @@ func initSegment(f *os.File) (*segment, error) {
 	}, nil
 }
 
-// readAt reads the entry in segment starting at offset, it returns an error if there was one.
+// readAt reads the entry starting at offset, it returns the entry and its size or an error.
 func (s *segment) readAt(offset int64) (*pb.Entry, int, error) {
 	e, n, err := pb.Decode(s.file, offset)
 	if err != nil {
@@ -85,16 +85,23 @@ var (
 	errSegmentFull = errors.New("segment full")
 )
 
-// append appends an entry to the segment and returns the segment number and starting offset, otherwise it returns an error.
-func (s *segment) append(e *pb.Entry) (int, int64, error) {
+// location represents the physical location of an entry
+type location struct {
+	segment int
+	offset  int64
+}
+
+// append appends an entry to the segment and returns the physical location or an error.
+func (s *segment) append(e *pb.Entry) (location, error) {
 	// encode our entry and its size into bytes
 	bytes, err := pb.Encode(e)
 	if err != nil {
-		return 0, 0, err
+		return location{}, err
 	}
 
+	// if written, entry would cause segment to exceed its capacity
 	if (len(bytes) + int(s.lastOffset)) > s.capacity {
-		return 0, 0, errSegmentFull
+		return location{}, errSegmentFull
 	}
 
 	// lock file when writing
@@ -104,12 +111,14 @@ func (s *segment) append(e *pb.Entry) (int, int64, error) {
 	// write the encoded entry to the file
 	n, err := s.file.Write(bytes)
 	if err != nil {
-		return 0, 0, err
+		return location{}, err
 	}
 
-	start := s.lastOffset
+	// get reference to entries offset
+	offset := s.lastOffset
 
+	// update segment's last offset
 	s.lastOffset += int64(n)
 
-	return s.index, start, nil
+	return location{s.index, offset}, nil
 }

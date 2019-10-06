@@ -8,9 +8,15 @@ type iterator struct {
 	s      *Store
 }
 
-// Next returns the next entry its segment (always 0), and its offset or an error if there was one.
-func (i *iterator) Next() (*pb.Entry, int, int64, error) {
-	e, n, err := i.s.ReadAt(0, i.offset)
+// Next returns the next entry or an error.
+func (i *iterator) Next() (*pb.Entry, error) {
+	e, _, _, err := i.next()
+	return e, err
+}
+
+// next returns the next entry, its physical offset, and the next physical offset, or an error.
+func (i *iterator) next() (*pb.Entry, int64, int64, error) {
+	e, n, err := i.s.readAt(i.offset)
 	if err != nil {
 		return nil, 0, 0, err
 	}
@@ -19,8 +25,5 @@ func (i *iterator) Next() (*pb.Entry, int, int64, error) {
 
 	i.offset += int64(n)
 
-	return e, 0, offset, nil
+	return e, offset, i.offset, nil
 }
-
-// Done is a noop since there is background processes afecting storage.
-func (i *iterator) Done() {}

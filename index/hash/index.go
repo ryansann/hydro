@@ -19,6 +19,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/pkg/errors"
 	"github.com/ryansann/hydro/pb"
 	"github.com/ryansann/hydro/storage"
 	"github.com/sirupsen/logrus"
@@ -46,8 +47,7 @@ func NoHash(key []byte) (string, error) {
 }
 
 type options struct {
-	hash    KeyHashFunc
-	restore bool
+	hash KeyHashFunc
 }
 
 // IndexOption is func that modifies the index configuration options.
@@ -60,13 +60,6 @@ func SetHashFunc(hash KeyHashFunc) IndexOption {
 	}
 }
 
-// Restore tells the Index whether or not to restore the keys from the storage log if it exists already.
-func Restore(v bool) IndexOption {
-	return func(opts *options) {
-		opts.restore = v
-	}
-}
-
 type entryLocation struct {
 	segment int
 	offset  int64
@@ -76,11 +69,13 @@ type entryLocation struct {
 type Index struct {
 	log *logrus.Logger
 
+	// store is the underlying storage layer
 	store storage.Storer
 
 	// mtx guards keys
-	mtx  sync.RWMutex
-	keys map[string]entryLocation
+	mtx sync.RWMutex
+	// keys maps keys to their virtual storage address
+	keys map[string]int64
 
 	hash KeyHashFunc
 }
@@ -90,8 +85,7 @@ type Index struct {
 func NewIndex(log *logrus.Logger, store storage.Storer, opts ...IndexOption) (*Index, error) {
 	// default config
 	cfg := &options{
-		hash:    NoHash,
-		restore: true,
+		hash: NoHash,
 	}
 
 	for _, opt := range opts {
@@ -101,15 +95,13 @@ func NewIndex(log *logrus.Logger, store storage.Storer, opts ...IndexOption) (*I
 	i := &Index{
 		log:   log,
 		store: store,
-		keys:  make(map[string]entryLocation, 0),
+		keys:  make(map[string]int64, 0),
 		hash:  cfg.hash,
 	}
 
-	if cfg.restore {
-		err := i.Restore()
-		if err != nil {
-			return nil, err
-		}
+	err := i.restore()
+	if err != nil {
+		return nil, errors.Wrap(err, "could not restore index")
 	}
 
 	return i, nil
@@ -134,17 +126,16 @@ func (i *Index) Set(key string, val string) error {
 
 	i.log.Debugf("setting entry: %+v", *entry)
 
-	i.mtx.Lock()
-	defer i.mtx.Unlock()
-
 	// append entry to storage log
-	seg, off, err := i.store.Append(entry)
+	pos, err := i.store.Append(entry)
 	if err != nil {
 		return err
 	}
 
 	// store the offset where we started writing
-	i.keys[hash] = entryLocation{segment: seg, offset: off}
+	i.mtx.Lock()
+	defer i.mtx.Unlock()
+	i.keys[hash] = pos
 
 	return nil
 }
@@ -157,16 +148,17 @@ func (i *Index) Get(key string) (string, error) {
 		return "", err
 	}
 
+	// get the position from the map, if we don't find it we don't have the key
 	i.mtx.RLock()
-	defer i.mtx.RUnlock()
-
-	// get the offset from the map, if we don't find it we don't have the key
-	loc, ok := i.keys[hash]
+	pos, ok := i.keys[hash]
+	i.mtx.RUnlock()
 	if !ok {
 		return "", fmt.Errorf("did not find key: %s in index", string(key))
 	}
 
-	e, _, err := i.store.ReadAt(loc.segment, loc.offset)
+	i.log.Debugf("reading entry at position: %v", pos)
+
+	e, err := i.store.ReadAt(pos)
 	if err != nil {
 		return "", err
 	}
@@ -185,10 +177,9 @@ func (i *Index) Del(key string) error {
 		return err
 	}
 
+	// check if we have a key to delete, if we don't it's an error
 	i.mtx.Lock()
 	defer i.mtx.Unlock()
-
-	// check if we have a key to delete, if we don't it's an error
 	_, ok := i.keys[hash]
 	if !ok {
 		return fmt.Errorf("nothing to delete for key: %s", string(key))
@@ -204,32 +195,31 @@ func (i *Index) Del(key string) error {
 	i.log.Debugf("setting entry: %+v", *entry)
 
 	// append deletion entry to storage log
-	_, _, err = i.store.Append(entry)
+	_, err = i.store.Append(entry)
 	if err != nil {
 		return err
 	}
 
-	// remove key from map
+	// remove key from map, mtx already locked
 	delete(i.keys, hash)
 
 	return nil
 }
 
-// Restore reads the storage log and restores the inmemory keys
-func (i *Index) Restore() error {
+// restore reads the storage log and restores the inmemory keys
+func (i *Index) restore() error {
 	i.mtx.Lock()
 	defer i.mtx.Unlock()
 
-	var iterr error
-	done := false
-
 	// get an iterator pointing to the beginning of the commit log
 	it := i.store.Begin()
-	defer it.Done()
+
+	var iterr error
+	var done bool
 
 	for {
 		// read entries from file until we encounter an eof or an unexpected error
-		e, seg, off, err := it.Next()
+		e, err := it.Next()
 		if err != nil {
 			if err == io.EOF {
 				done = true
@@ -245,7 +235,7 @@ func (i *Index) Restore() error {
 		// add the key if we encounter a write entry, delete it if we encounter a delete entry.
 		switch e.GetType() {
 		case pb.EntryType_WRITE:
-			i.keys[e.GetKey()] = entryLocation{seg, off}
+			i.keys[e.GetKey()] = e.Position
 		case pb.EntryType_DELETE:
 			delete(i.keys, e.GetKey())
 		}

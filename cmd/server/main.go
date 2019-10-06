@@ -32,7 +32,6 @@ const (
 
 	// index env vars
 	indexModeVar = "HYDRO_INDEX_MODE"
-	hiRestoreVar = "HYDRO_HASH_INDEX_RESTORE"
 
 	// server env var names
 	portVar            = "HYDRO_SERVER_PORT"
@@ -52,12 +51,7 @@ func main() {
 	}
 	defer s.Close()
 
-	iopts, err := indexOpts()
-	if err != nil {
-		l.Fatal(err)
-	}
-
-	idx, err := hash.NewIndex(l, s, iopts...)
+	idx, err := hash.NewIndex(l, s)
 	if err != nil {
 		l.Fatalf("could not create index: %v", err)
 	}
@@ -237,22 +231,6 @@ func serverOpts() ([]tcp.ServerOption, error) {
 		}
 
 		opts = append(opts, tcp.ShutdownTimeout(dur))
-	}
-
-	return opts, nil
-}
-
-// indexOpts constructs the list of options to provide to the hydro hash index.
-func indexOpts() ([]hash.IndexOption, error) {
-	var opts []hash.IndexOption
-
-	if nr := os.Getenv(hiRestoreVar); nr != "" {
-		v, err := strconv.ParseBool(nr)
-		if err != nil {
-			return nil, err
-		}
-
-		opts = append(opts, hash.Restore(v))
 	}
 
 	return opts, nil

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,12 +51,22 @@ func Compaction(enabled bool) StoreOption {
 // Store provides operations for persisting to a data directory where storage segments are written as files.
 // It implements the storage.Storer interface.
 type Store struct {
-	log         *logrus.Logger
-	dirPath     string
+	log *logrus.Logger
+
+	// dirPath is where data files are stored
+	dirPath string
+	// nextPos is the next position for an entry
+	nextPos int64
+	// segmentSize is the size in bytes for a storage segment
 	segmentSize int
-	segments    []segment
-	// mtx should be held when iterating or compacting previous segments.
-	mtx sync.Mutex
+
+	// pmtx guards pageTable
+	pmtx sync.RWMutex
+	// pageTable maps virtual addresses (positions) to physical addresses (locations)
+	pageTable map[int64]location
+
+	// segments holds storage segments (files)
+	segments []segment
 }
 
 // NewStore returns a new Store object or an error.
@@ -151,54 +162,105 @@ func (s *Store) initSegments() error {
 }
 
 // ReadAt reads the entry from segment starting at offset, returning an error if there was one.
-func (s *Store) ReadAt(segment int, offset int64) (*pb.Entry, int, error) {
-	if segment > len(s.segments) {
-		return nil, 0, fmt.Errorf("segment %v does not exist", segment)
+func (s *Store) ReadAt(position int64) (*pb.Entry, error) {
+	// look up physical location for position
+	s.pmtx.RLock()
+	loc, ok := s.pageTable[position]
+	s.pmtx.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("no entry found at position: %v", position)
 	}
 
-	return s.segments[segment].readAt(offset)
+	e, _, err := s.readAt(loc)
+	return e, err
 }
 
-// Begin returns an iterator to the beginning of the storage log, and locks the log from writes while iterating.
+// readAt takes a physical entry location and returns the entry and its size or an error.
+func (s *Store) readAt(loc location) (*pb.Entry, int, error) {
+	if loc.segment > len(s.segments) {
+		return nil, 0, fmt.Errorf("segment %v does not exist", loc.segment)
+	}
+
+	return s.segments[loc.segment].readAt(loc.offset)
+}
+
+// Begin returns a forward iterator to the beginning of the storage entries.
 func (s *Store) Begin() storage.ForwardIterator {
-	s.mtx.Lock()
 	return &iterator{
 		s: s,
 	}
 }
 
-// Append appends data a segment and returns the segment and staring offset, otherwise it returns an error.
-func (s *Store) Append(e *pb.Entry) (int, int64, error) {
-	idx, offset, err := s.segments[len(s.segments)-1].append(e)
+// Append appends data to a storeage segment and returns its position or an error.
+func (s *Store) Append(e *pb.Entry) (int64, error) {
+	e.Position = s.nextPos
+	_ = atomic.AddInt64(&s.nextPos, 1) // increment position counter
+
+	// append to segment, create a new segment and append there if current segment is full
+	loc, err := s.segments[len(s.segments)-1].append(e)
 	if err != nil && err == errSegmentFull {
-		seg, err := newSegment(s.getNewFilePath(), len(s.segments), s.segmentSize)
-		if err != nil {
-			return 0, 0, err
+		if err == errSegmentFull {
+			return s.appendNewSegment(e)
 		}
 
-		s.log.Debugf("segment %v full, new segment created", len(s.segments)-1)
-
-		s.segments = append(s.segments, *seg)
-
-		return seg.append(e)
-	} else if err != nil {
-		return 0, 0, err
+		// unsuccessful append
+		return 0, err
 	}
 
-	return idx, offset, nil
+	// update page table, no new segment created
+	s.pmtx.Lock()
+	defer s.pmtx.Unlock()
+	s.pageTable[e.Position] = loc
+
+	return e.Position, nil
+}
+
+// appendNewSegment creates a new segment and append entry to it, returning the position or an error.
+func (s *Store) appendNewSegment(e *pb.Entry) (int64, error) {
+	seg, err := newSegment(s.getNewFilePath(), len(s.segments), s.segmentSize)
+	if err != nil {
+		return 0, err
+	}
+
+	s.log.Debugf("segment %v full, new segment created", len(s.segments)-1)
+
+	s.segments = append(s.segments, *seg)
+
+	// run compaction on old segments when a new one is created
+	go s.compact()
+
+	loc, err := seg.append(e)
+	if err != nil {
+		return 0, err
+	}
+
+	// update page table
+	s.pmtx.Lock()
+	defer s.pmtx.Unlock()
+	s.pageTable[e.Position] = loc
+
+	return e.Position, nil
 }
 
 // Close closes all underlying segment files and stops background processes.
 func (s *Store) Close() error {
 	// acquire the lock for the store, no in progress iterators or background processe during close.
-	s.mtx.Lock()
-	defer s.mtx.Unlock()
-
 	for _, seg := range s.segments {
 		_ = seg.file.Close()
 	}
 
 	return nil
+}
+
+// compact rewrites previous segments with the entries that affect the current index state only.
+// Compaction removes entries that are no longer needed for maintaining an index, and thus reduce storage space.
+// Compaction writes to new segment files, removing previous ones after completed.
+// For example:
+// {write, hello, world}{delete, hello}{write, hello, worldagain}
+// can be compacted to:
+// {write, hello, worldagain}
+func (s *Store) compact() {
+
 }
 
 // getFilePath returns the full path of the file with name.

@@ -23,7 +23,6 @@ The are hydro specific environment variables that will change runtime behavior. 
 - Support clustering and replication across nodes
 - Multiple indexes
 
-
 ## Misc
 
 Project Files: `find . -path ./vendor -prune -o -name "*.go" -print | xargs wc -l`

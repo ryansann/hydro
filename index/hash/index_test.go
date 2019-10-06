@@ -224,8 +224,8 @@ func runIndexRestoreTest(t *testing.T, h KeyHashFunc) {
 		t.Error(err)
 	}
 
-	i.keys = make(map[string]entryLocation, 0)
-	err = i.Restore()
+	i.keys = make(map[string]int64, 0)
+	err = i.restore()
 	if err != nil {
 		t.Error(err)
 	}

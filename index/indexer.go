@@ -11,6 +11,4 @@ type Indexer interface {
 	Set(key, val string) error
 	// Del removes key and its corresponding value, returning an error if the operation was unsuccessful
 	Del(key string) error
-	// Restore rebuilds the index using the underlying storage, returning an error if the operation was unsuccessful.
-	Restore() error
 }
