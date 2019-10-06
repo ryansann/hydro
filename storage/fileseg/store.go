@@ -74,7 +74,7 @@ type Store struct {
 	// smtx guards segments
 	smtx sync.Mutex
 	// segments maps segment indexes to the corresponding segment
-	segments map[int]segment
+	segments []*segment
 }
 
 // NewStore returns a new Store object or an error.
@@ -146,12 +146,13 @@ func (s *Store) init() error {
 		}
 
 		// initialize segments map
-		s.segments[seg.index] = *seg // dereference non nil segment
+		s.segments = append(s.segments, seg)
 
 		return nil
 	}
 
-	segments := make(map[int]segment, 0)
+	var nextPos int64
+	segments := make([]*segment, len(files))
 
 	// if there are existing segment files we need to initialize segments and restore the store's page table
 	for _, file := range files {
@@ -164,7 +165,7 @@ func (s *Store) init() error {
 		}
 
 		// initialize segment from data file
-		seg, err := initSegment(f)
+		seg, positions, err := initSegment(f)
 		if err != nil {
 			return errors.Wrapf(err, "could not initialize segment from: %s", fpath)
 		}
@@ -172,11 +173,24 @@ func (s *Store) init() error {
 		s.log.Debugf("initialized segement: %+v", *seg)
 
 		// set the segment
-		segments[seg.index] = *seg // dereference non nil segment
+		segments[seg.index] = seg
+
+		// initialize page table, track next position
+		for _, pos := range positions {
+			// position -> segment index
+			s.pageTable[pos] = seg.index
+
+			if pos > nextPos {
+				nextPos = pos
+			}
+		}
 	}
 
 	// set the segments map to the initialized segments map
 	s.segments = segments
+
+	// update nextPos to the maximum position seen + 1
+	s.nextPos.Store(nextPos + 1)
 
 	return nil
 }
@@ -192,17 +206,15 @@ func (s *Store) ReadAt(position int64) (*pb.Entry, error) {
 		return nil, fmt.Errorf("no entry found at position: %v", position)
 	}
 
-	// look up the entry by its physical address
-	e, _, err := s.readAt(segment, position)
-
-	return e, err
+	// look up the entry by its position in its physical segment
+	return s.readAt(segment, position)
 }
 
 // readAt takes a physical segment and virtual position returns the entry from segment that has that position, or an error.
-func (s *Store) readAt(segment int, position int64) (*pb.Entry, int, error) {
+func (s *Store) readAt(segment int, position int64) (*pb.Entry, error) {
 	// make sure the segment is valid
 	if segment > len(s.segments) {
-		return nil, 0, fmt.Errorf("segment %v does not exist", segment)
+		return nil, fmt.Errorf("segment %v does not exist", segment)
 	}
 
 	// lookup the entry by its physical offset in the correct segment.
@@ -218,12 +230,20 @@ func (s *Store) Begin() storage.ForwardIterator {
 
 // Append appends data to a storeage segment and returns its position or an error.
 func (s *Store) Append(e *pb.Entry) (int64, error) {
-	e.Position = s.nextPos
-	_ = atomic.AddInt64(&s.nextPos, 1) // increment position counter
+	position := s.nextPos.Load()
+	s.log.Debugf("appending entry at position: %v", position)
+
+	e.Position = position
+	np := s.nextPos.Add(1) // increment position counter
+
+	s.log.Debugf("next position: %v", np)
+
+	// segment index for most recent segment, i.e. segment to append to
+	index := len(s.segments) - 1
 
 	// append to segment, create a new segment and append there if current segment is full
-	loc, err := s.segments[len(s.segments)-1].append(e)
-	if err != nil && err == errSegmentFull {
+	err := s.segments[index].append(e)
+	if err != nil {
 		if err == errSegmentFull {
 			return s.appendNewSegment(e)
 		}
@@ -235,7 +255,7 @@ func (s *Store) Append(e *pb.Entry) (int64, error) {
 	// update page table, no new segment created
 	s.pmtx.Lock()
 	defer s.pmtx.Unlock()
-	s.pageTable[e.Position] = loc
+	s.pageTable[e.Position] = index
 
 	return e.Position, nil
 }
@@ -249,12 +269,12 @@ func (s *Store) appendNewSegment(e *pb.Entry) (int64, error) {
 
 	s.log.Debugf("segment %v full, new segment created", len(s.segments)-1)
 
-	s.segments = append(s.segments, *seg)
+	s.segments = append(s.segments, seg)
 
 	// run compaction on old segments when a new one is created
 	go s.compact()
 
-	loc, err := seg.append(e)
+	err = seg.append(e)
 	if err != nil {
 		return 0, err
 	}
@@ -262,7 +282,7 @@ func (s *Store) appendNewSegment(e *pb.Entry) (int64, error) {
 	// update page table
 	s.pmtx.Lock()
 	defer s.pmtx.Unlock()
-	s.pageTable[e.Position] = loc
+	s.pageTable[e.Position] = seg.index
 
 	return e.Position, nil
 }

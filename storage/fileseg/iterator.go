@@ -18,43 +18,37 @@ type iterator struct {
 
 // Next returns the next entry or an error.
 func (i *iterator) Next() (*pb.Entry, error) {
-	e, _, _, err := i.next()
-	return e, err
+	return i.next()
 }
 
-// next returns the next entry, its segment, and its offset or an error if there was one.
-func (i *iterator) next() (*pb.Entry, location, location, error) {
+// next returns the next entry, its segment, and the next segment or an error if there was one.
+func (i *iterator) next() (*pb.Entry, error) {
+	// if the segment index is greater than the number of segments, we reached the end
 	if i.segment > len(i.s.segments)-1 {
-		return nil, location{}, location{}, io.EOF
+		return nil, io.EOF
 	}
 
-	// skip the segment info when reading, default beginning to startOffset
-	if i.offset == 0 {
-		i.offset = i.s.segments[i.segment].startOffset
+	// initialize curIt
+	if i.curIt == nil {
+		seg := i.s.segments[i.segment]
+		i.curIt = &segmentIterator{seg, seg.startOffset.Load()}
 	}
 
-	// if the offset is the last offset or more, go to the next segment
-	if i.offset >= i.s.segments[i.segment].lastOffset {
-		// return an io.EOF error if there is not another segment
-		if i.segment == len(i.s.segments)-1 {
-			return nil, location{}, location{}, io.EOF
+	e, _, _, err := i.curIt.next()
+	if err != nil {
+		// if we reach the end of the segment go to the next
+		if err == io.EOF {
+			i.segment++
+			i.curIt = nil
+			return i.next()
 		}
 
-		i.segment++
-		i.offset = i.s.segments[i.segment].startOffset
+		// other error while reading from segment
+		return nil, err
 	}
 
-	e, n, err := i.s.segments[i.segment].readAt(i.offset)
-	if err != nil {
-		return nil, location{}, location{}, err
-	}
-
-	curOffset := i.offset
-
-	// update offset for next call
-	i.offset += int64(n)
-
-	return e, location{i.segment, curOffset}, location{i.segment, curOffset}, nil
+	// we got an entry from segment without an error
+	return e, nil
 }
 
 // segmentIterator provides functionality for iterating over the entries in a segment file.

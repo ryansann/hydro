@@ -159,7 +159,7 @@ func (s *segment) readAt(position int64) (*pb.Entry, error) {
 	// look up physical offset for position in page table
 	s.pmtx.RLock()
 	offset, ok := s.pageTable[position]
-	s.pmtx.Unlock()
+	s.pmtx.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("no entry found in segment: %v at position: %v", s.index, position)
 	}
@@ -211,8 +211,10 @@ func (s *segment) append(e *pb.Entry) error {
 		return err
 	}
 
-	// get reference to entries offset
-	offset := s.lastOffset.Load()
+	// update page table
+	s.pmtx.Lock()
+	s.pageTable[e.Position] = s.lastOffset.Load()
+	s.pmtx.Unlock()
 
 	// update segment's last offset atomically
 	_ = s.lastOffset.Add(int64(n))
