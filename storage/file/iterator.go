@@ -4,8 +4,8 @@ import "github.com/ryansann/hydro/pb"
 
 // iterator provides functionality for iterating over entries in the store.
 type iterator struct {
-	offset int64
 	s      *Store
+	offset int64
 }
 
 // Next returns the next entry or an error.
