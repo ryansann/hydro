@@ -16,13 +16,3 @@ You can connect to the server via `telnet localhost <port>`. Once connected you 
 If you have restore enabled, the database will read the commit log to reload the key value store on startup.
 
 The are hydro specific environment variables that will change runtime behavior. Those can be found [here](https://github.com/ryansann/hydro/blob/master/.envrc)
-
-## Future Work
-
-- Implement additional indexing / storage modes, e.g. SSTable, LSM
-- Support clustering and replication across nodes
-- Multiple indexes
-
-## Misc
-
-Project Files: `find . -path ./vendor -prune -o -name "*.go" -print | xargs wc -l`
