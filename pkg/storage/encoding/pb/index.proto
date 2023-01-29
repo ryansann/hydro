@@ -1,6 +1,8 @@
 syntax = "proto3";
 
-package pb;
+import google.protobuf.Timestamp
+
+option go_package = './generated'
 
 enum EntryType {
 	WRITE = 0;
@@ -11,7 +13,8 @@ message Entry {
 	EntryType type = 1;
 	string key = 2;
 	bytes value = 3;
-	int64 position = 4;
+	int64 offset = 4;
+	google.protobuf.Timestamp ts = 5;
 }
 
 message SegmentInfo {
